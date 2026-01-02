@@ -1,12 +1,88 @@
 """
-QWAS AI Team Agents
+Hattz Empire - AI Agents (Dual Engine + Single Engine)
+
+듀얼 엔진: 각 역할에 최적화된 두 AI가 협업
+싱글 엔진: 특수 역할 (Analyst - Gemini 3.0 Pro 1M 컨텍스트)
 """
-from .secretary import Secretary, get_secretary, StructuredRequest
-from .qa import QA, get_qa, QAReport
-from .archivist import Archivist, get_archivist, ConversationEntry
+
+# Base
+from .base import (
+    DualEngineAgent,
+    EngineResponse,
+    DualEngineResponse,
+    APIClient,
+    call_llm,
+)
+
+# Excavator (Claude Opus + GPT-5.2)
+from .excavator import (
+    Excavator,
+    ExcavatorOutput,
+    get_excavator,
+)
+
+# Strategist (GPT-5.2 + Gemini 3.0)
+from .strategist import (
+    Strategist,
+    StrategyOutput,
+    get_strategist,
+)
+
+# Coder (Opus + GPT-5.2)
+from .coder import (
+    Coder,
+    CodeOutput,
+    get_coder,
+)
+
+# QA (GPT-5.2 + Opus)
+from .qa_dual import (
+    QA,
+    QAOutput,
+    Issue,
+    TestCase,
+    get_qa,
+)
+
+# Analyst (Gemini 3.0 Pro - Single Engine)
+from .analyst import (
+    Analyst,
+    AnalysisResult,
+    get_analyst,
+)
 
 __all__ = [
-    "Secretary", "get_secretary", "StructuredRequest",
-    "QA", "get_qa", "QAReport",
-    "Archivist", "get_archivist", "ConversationEntry",
+    # Base
+    "DualEngineAgent",
+    "EngineResponse",
+    "DualEngineResponse",
+    "APIClient",
+    "call_llm",
+
+    # Excavator
+    "Excavator",
+    "ExcavatorOutput",
+    "get_excavator",
+
+    # Strategist
+    "Strategist",
+    "StrategyOutput",
+    "get_strategist",
+
+    # Coder
+    "Coder",
+    "CodeOutput",
+    "get_coder",
+
+    # QA
+    "QA",
+    "QAOutput",
+    "Issue",
+    "TestCase",
+    "get_qa",
+
+    # Analyst
+    "Analyst",
+    "AnalysisResult",
+    "get_analyst",
 ]

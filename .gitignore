@@ -1,6 +1,9 @@
 # Environment variables (secrets)
 .env
 
+# Prompt documentation (contains sensitive info)
+PROMPT.md
+
 # Python cache
 __pycache__/
 *.pyc
@@ -8,6 +11,9 @@ __pycache__/
 
 # Sessions (can be large)
 sessions/
+
+# Storage (logs, index)
+storage/
 
 # IDE
 .vscode/
