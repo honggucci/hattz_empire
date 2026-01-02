@@ -1,0 +1,15 @@
+# Environment variables (secrets)
+.env
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Sessions (can be large)
+sessions/
+
+# IDE
+.vscode/
+.idea/
+.claude/
