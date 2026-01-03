@@ -74,15 +74,23 @@ def get_session(session_id: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def list_sessions(limit: int = 50) -> List[Dict[str, Any]]:
-    """세션 목록 조회 (최근 순)"""
+def list_sessions(limit: int = 50, include_deleted: bool = False) -> List[Dict[str, Any]]:
+    """세션 목록 조회 (최근 순, 삭제된 세션 제외)"""
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("""
-            SELECT TOP (?) id, name, project, agent, created_at, updated_at
-            FROM chat_sessions
-            ORDER BY updated_at DESC
-        """, (limit,))
+        if include_deleted:
+            cursor.execute("""
+                SELECT TOP (?) id, name, project, agent, created_at, updated_at, is_deleted, deleted_at
+                FROM chat_sessions
+                ORDER BY updated_at DESC
+            """, (limit,))
+        else:
+            cursor.execute("""
+                SELECT TOP (?) id, name, project, agent, created_at, updated_at
+                FROM chat_sessions
+                WHERE is_deleted = 0 OR is_deleted IS NULL
+                ORDER BY updated_at DESC
+            """, (limit,))
         sessions = []
         for row in cursor.fetchall():
             sessions.append({
@@ -124,10 +132,14 @@ def update_session(session_id: str, name: Optional[str] = None, project: Optiona
 
 
 def delete_session(session_id: str) -> bool:
-    """세션 삭제 (메시지도 CASCADE 삭제)"""
+    """세션 소프트 삭제 (DB에는 보관, UI에서만 숨김)"""
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM chat_sessions WHERE id = ?", (session_id,))
+        cursor.execute("""
+            UPDATE chat_sessions
+            SET is_deleted = 1, deleted_at = GETDATE()
+            WHERE id = ? AND (is_deleted = 0 OR is_deleted IS NULL)
+        """, (session_id,))
         conn.commit()
         return cursor.rowcount > 0
 
@@ -203,6 +215,53 @@ def clear_messages(session_id: str) -> int:
         count = cursor.rowcount
         conn.commit()
         return count
+
+
+# =============================================================================
+# Migrations
+# =============================================================================
+
+def run_soft_delete_migration() -> Dict[str, Any]:
+    """소프트 삭제 컬럼 마이그레이션 실행"""
+    results = {"added_columns": [], "errors": []}
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+
+        # is_deleted 컬럼 확인 및 추가
+        cursor.execute("""
+            SELECT 1 FROM sys.columns
+            WHERE object_id = OBJECT_ID('chat_sessions')
+            AND name = 'is_deleted'
+        """)
+        if not cursor.fetchone():
+            try:
+                cursor.execute("ALTER TABLE chat_sessions ADD is_deleted BIT DEFAULT 0 NOT NULL")
+                conn.commit()
+                results["added_columns"].append("is_deleted")
+            except Exception as e:
+                results["errors"].append(f"is_deleted: {str(e)}")
+
+        # deleted_at 컬럼 확인 및 추가
+        cursor.execute("""
+            SELECT 1 FROM sys.columns
+            WHERE object_id = OBJECT_ID('chat_sessions')
+            AND name = 'deleted_at'
+        """)
+        if not cursor.fetchone():
+            try:
+                cursor.execute("ALTER TABLE chat_sessions ADD deleted_at DATETIME NULL")
+                conn.commit()
+                results["added_columns"].append("deleted_at")
+            except Exception as e:
+                results["errors"].append(f"deleted_at: {str(e)}")
+
+        # 기존 NULL 데이터 업데이트
+        cursor.execute("UPDATE chat_sessions SET is_deleted = 0 WHERE is_deleted IS NULL")
+        conn.commit()
+
+    results["success"] = len(results["errors"]) == 0
+    return results
 
 
 # =============================================================================

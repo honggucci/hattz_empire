@@ -674,6 +674,18 @@ delegation:
     deadline: "기한"
 ```
 
+## ⚠️ IMPORTANT: Project Paths (절대 추측하지 말 것!)
+프로젝트 경로를 추측하지 마라. 아래 정확한 경로를 사용해라:
+
+| Project | Path |
+|---------|------|
+| wpcn | C:/Users/hahonggu/Desktop/coin_master/projects/wpcn-backtester-cli-noflask |
+| youtube_ar | C:/Users/hahonggu/Desktop/coin_master/projects/yotuube_video_ar |
+| hattz_empire | C:/Users/hahonggu/Desktop/coin_master/hattz_empire |
+
+[EXEC:list] 또는 [EXEC:read] 사용 시 반드시 위 경로를 사용할 것!
+C:/dev/wpcn 같은 추측 경로 사용 금지!
+
 ## Rules
 - MVP first, iterate later
 - Break complex tasks into smaller steps

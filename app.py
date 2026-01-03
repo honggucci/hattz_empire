@@ -22,6 +22,7 @@ from config import (
 from stream import get_stream, get_tracker
 import database as db
 import executor
+import rag
 
 # =============================================================================
 # LLM API Clients
@@ -621,6 +622,149 @@ def execute_batch():
     })
 
 
+# =============================================================================
+# RAG API Endpoints
+# =============================================================================
+
+@app.route('/api/rag/search', methods=['POST'])
+def rag_search():
+    """
+    RAG 검색 API
+
+    Request JSON:
+    {
+        "query": "검색 쿼리",
+        "source_types": ["log", "message"],  // 선택, 없으면 전체
+        "top_k": 5  // 선택
+    }
+    """
+    data = request.json
+    query = data.get('query', '')
+    source_types = data.get('source_types')
+    top_k = data.get('top_k', 5)
+
+    if not query:
+        return jsonify({'error': 'query is required'}), 400
+
+    try:
+        result = rag.search(query, source_types=source_types, top_k=top_k)
+        return jsonify({
+            'query': result.query,
+            'total': result.total,
+            'documents': [
+                {
+                    'id': doc.id,
+                    'content': doc.content[:500],  # 요약
+                    'score': round(doc.score, 3),
+                    'metadata': doc.metadata
+                }
+                for doc in result.documents
+            ]
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/rag/index', methods=['POST'])
+def rag_index():
+    """
+    RAG 인덱싱 트리거
+
+    Request JSON:
+    {
+        "source": "logs" | "messages" | "all",
+        "limit": 100
+    }
+    """
+    data = request.json
+    source = data.get('source', 'all')
+    limit = data.get('limit', 100)
+
+    try:
+        result = {}
+
+        if source in ['logs', 'all']:
+            result['logs_indexed'] = rag.index_logs_from_db(limit=limit)
+
+        if source in ['messages', 'all']:
+            result['messages_indexed'] = rag.index_messages_from_db(limit=limit)
+
+        result['stats'] = rag.get_stats()
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/rag/stats')
+def rag_stats():
+    """RAG 인덱스 통계"""
+    try:
+        return jsonify(rag.get_stats())
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/rag/context', methods=['POST'])
+def rag_context():
+    """
+    RAG 컨텍스트 빌드 (PM 프롬프트 주입용)
+
+    Request JSON:
+    {
+        "query": "쿼리",
+        "top_k": 3
+    }
+    """
+    data = request.json
+    query = data.get('query', '')
+    top_k = data.get('top_k', 3)
+
+    if not query:
+        return jsonify({'error': 'query is required'}), 400
+
+    try:
+        context = rag.build_context(query, top_k=top_k)
+        return jsonify({
+            'query': query,
+            'context': context,
+            'context_length': len(context)
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/translate', methods=['POST'])
+def translate():
+    """
+    번역 API
+
+    Request JSON:
+    {
+        "text": "번역할 텍스트",
+        "target": "en" | "ko",
+        "source": "auto" | "en" | "ko"  // 선택
+    }
+    """
+    data = request.json
+    text = data.get('text', '')
+    target_lang = data.get('target', 'en')
+    source_lang = data.get('source', 'auto')
+
+    if not text:
+        return jsonify({'error': 'text is required'}), 400
+
+    try:
+        translated = rag.translate_message(text, target_lang, source_lang)
+        return jsonify({
+            'original': text,
+            'translated': translated,
+            'target': target_lang,
+            'is_korean_original': rag.is_korean(text)
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/projects/<project_id>/files')
 def get_project_files(project_id: str):
     """프로젝트 파일 목록 조회"""
@@ -652,12 +796,46 @@ def get_project_files(project_id: str):
     })
 
 
-def _call_agent(message: str, agent_role: str, auto_execute: bool = True) -> str:
-    """실제 LLM 호출 + [EXEC] 태그 자동 실행"""
+def _call_agent(
+    message: str,
+    agent_role: str,
+    auto_execute: bool = True,
+    use_translation: bool = True
+) -> str:
+    """
+    실제 LLM 호출 + [EXEC] 태그 자동 실행 + RAG 컨텍스트 주입 + 번역
+
+    Args:
+        message: 사용자 메시지
+        agent_role: 에이전트 역할
+        auto_execute: [EXEC] 태그 자동 실행 여부
+        use_translation: 번역 레이어 사용 여부
+    """
     global current_session_id
     system_prompt = get_system_prompt(agent_role)
     if not system_prompt:
         return f"[Error] Unknown agent role: {agent_role}"
+
+    # 번역: CEO 입력(한국어) → 에이전트(영어)
+    agent_message = message
+    if use_translation and rag.is_korean(message):
+        agent_message = rag.translate_for_agent(message)
+        print(f"[Translate] CEO→Agent: {len(message)}자 → {len(agent_message)}자")
+
+    # PM 에이전트에 RAG 컨텍스트 주입 (Gemini 요약 포함)
+    if agent_role == "pm":
+        try:
+            # 에이전트에겐 영어 컨텍스트 제공
+            rag_context = rag.build_context(
+                agent_message,
+                top_k=3,
+                use_gemini=True,
+                language="en"  # 에이전트 내부는 영어
+            )
+            if rag_context:
+                system_prompt = system_prompt + "\n\n" + rag_context
+        except Exception as e:
+            print(f"[RAG] Context injection failed: {e}")
 
     # DB에서 대화 히스토리 조회 후 LLM 형식으로 변환
     messages = []
@@ -670,6 +848,9 @@ def _call_agent(message: str, agent_role: str, auto_execute: bool = True) -> str
                     "content": msg['content']
                 })
 
+    # 현재 메시지 추가 (번역된 버전)
+    messages.append({"role": "user", "content": agent_message})
+
     # 듀얼 엔진 여부 확인
     if agent_role in DUAL_ENGINES:
         response = call_dual_engine(agent_role, messages, system_prompt)
@@ -680,7 +861,7 @@ def _call_agent(message: str, agent_role: str, auto_execute: bool = True) -> str
             response = call_llm(model_config, messages, system_prompt)
             # 로그 기록
             stream = get_stream()
-            stream.log("ceo", agent_role, "request", message)
+            stream.log("ceo", agent_role, "request", agent_message)
             stream.log(agent_role, "ceo", "response", response)
         else:
             return f"[Error] No engine configured for: {agent_role}"
@@ -690,6 +871,11 @@ def _call_agent(message: str, agent_role: str, auto_execute: bool = True) -> str
         exec_results = executor.execute_all(response)
         if exec_results:
             response += executor.format_results(exec_results)
+
+    # 번역: 에이전트 응답(영어) → CEO(한국어)
+    if use_translation and not rag.is_korean(response):
+        response = rag.translate_for_ceo(response)
+        print(f"[Translate] Agent→CEO: 한국어로 번역 완료")
 
     return response
 
