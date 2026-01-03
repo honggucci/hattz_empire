@@ -388,12 +388,16 @@ def execute_all(text: str) -> List[ExecutionResult]:
 LARGE_FILE_THRESHOLD = 10000  # 10KB 이상이면 Gemini로 요약
 
 
-def _summarize_with_gemini(content: str, file_path: str) -> str:
+def _summarize_with_gemini(content: str, file_path: str, session_id: str = None) -> str:
     """
     Gemini를 사용해 대용량 파일 요약/통계화
 
     Gemini 3 Pro는 1M 토큰 컨텍스트로 대용량 처리에 최적
     """
+    import time
+    start_time = time.time()
+    input_chars = len(content)
+
     try:
         import google.generativeai as genai
         import os
@@ -443,15 +447,67 @@ def _summarize_with_gemini(content: str, file_path: str) -> str:
 한글로 간결하게 작성."""
 
         response = model.generate_content(prompt)
+        output_text = response.text
+
+        # 로그 기록 (agent_logs에 Gemini 요약 기록)
+        latency_ms = int((time.time() - start_time) * 1000)
+        _log_gemini_summarization(
+            session_id=session_id,
+            task_type="file_summarize",
+            input_chars=input_chars,
+            output_chars=len(output_text),
+            latency_ms=latency_ms,
+            file_path=file_path
+        )
 
         return f"""📊 **Gemini 요약** (원본: {len(content):,} bytes)
 
-{response.text}"""
+{output_text}"""
 
     except ImportError:
         return f"[요약 불가: google-generativeai 미설치]\n원본 크기: {len(content):,} bytes"
     except Exception as e:
         return f"[요약 실패: {str(e)}]\n원본 크기: {len(content):,} bytes\n\n처음 2000자:\n{content[:2000]}"
+
+
+def _log_gemini_summarization(
+    session_id: str,
+    task_type: str,
+    input_chars: int,
+    output_chars: int,
+    latency_ms: int,
+    file_path: str = None
+):
+    """Gemini 요약 호출을 agent_logs DB에 기록"""
+    try:
+        from agent_scorecard import get_scorecard
+
+        scorecard = get_scorecard()
+        if not scorecard._initialized:
+            print("[Executor] Scorecard not initialized, skipping log")
+            return
+
+        # 토큰 추정 (한글 1자 ≈ 2토큰, 영문 4자 ≈ 1토큰)
+        input_tokens = input_chars // 3
+        output_tokens = output_chars // 3
+
+        task_summary = f"Gemini 요약: {file_path or 'unknown'}"[:200]
+
+        log_id = scorecard.log_task(
+            session_id=session_id or "system",
+            task_id=f"gemini_sum_{latency_ms}",
+            role="summarizer",
+            engine="gemini",
+            model="gemini-2.0-flash",
+            task_type=task_type,
+            task_summary=task_summary,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            latency_ms=latency_ms
+        )
+        print(f"[Executor] Gemini summarization logged: {log_id}")
+    except Exception as e:
+        print(f"[Executor] Failed to log Gemini call: {e}")
 
 
 def format_results(results: List[ExecutionResult]) -> str:

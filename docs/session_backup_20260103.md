@@ -55,6 +55,20 @@
 - `/api/scores/best/<role>` - 역할별 최고 모델
 - `/api/scores/dashboard` - 대시보드
 
+### 6. Gemini 요약 로그 DB 기록 추가 (신규)
+- **executor.py**: `_log_gemini_summarization()` 함수 추가
+  - 대용량 파일(10KB+) Gemini 요약 시 agent_logs에 기록
+  - role: `summarizer`, engine: `gemini`, task_type: `file_summarize`
+- **rag.py**: `_log_gemini_rag_summarization()` 함수 추가
+  - RAG 검색 결과 요약 시 agent_logs에 기록
+  - role: `summarizer`, engine: `gemini`, task_type: `rag_summarize`
+
+### 7. UI 개선 (신규)
+- **static/css/style.css**: 채팅 히스토리 박스 높이 조정
+  - `.session-list` max-height: `250px` → `calc(100vh - 450px)`
+  - 뷰포트 높이에 따라 동적 확장
+  - clear/export 버튼까지 닿도록 개선
+
 ## 시스템 점수: 100/100
 
 | 항목 | 점수 | 설명 |
@@ -71,5 +85,10 @@
 4. 검색은 Perplexity (트리거 기반)
 5. 실패 시 자동 승격
 
+## 변경된 파일 목록
+- `executor.py` - Gemini 요약 로깅 추가
+- `rag.py` - Gemini RAG 요약 로깅 추가
+- `static/css/style.css` - 채팅 히스토리 박스 높이 조정
+
 ---
-*Last Updated: 2026-01-03*
+*Last Updated: 2026-01-03 Session 2*

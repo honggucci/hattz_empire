@@ -34,7 +34,7 @@ load_dotenv()
 # Gemini Summarizer
 # =============================================================================
 
-def summarize_with_gemini(query: str, documents: List[str], language: str = "ko") -> str:
+def summarize_with_gemini(query: str, documents: List[str], language: str = "ko", session_id: str = None) -> str:
     """
     Gemini를 사용해 검색된 문서들을 쿼리 관점에서 요약
 
@@ -42,16 +42,24 @@ def summarize_with_gemini(query: str, documents: List[str], language: str = "ko"
         query: 사용자 질문
         documents: 검색된 문서 내용들
         language: 출력 언어 ('ko' 또는 'en')
+        session_id: 세션 ID (로깅용)
 
     Returns:
         요약된 컨텍스트
     """
+    import time
+    start_time = time.time()
+
     if not GEMINI_AVAILABLE:
         # Gemini 없으면 그냥 문서 합치기
         return "\n\n".join(documents)
 
     if not documents:
         return ""
+
+    # 입력 크기 계산
+    combined_input = query + "\n".join(documents)
+    input_chars = len(combined_input)
 
     try:
         client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
@@ -90,12 +98,65 @@ def summarize_with_gemini(query: str, documents: List[str], language: str = "ko"
             contents=prompt
         )
 
-        return response.text.strip()
+        output_text = response.text.strip()
+
+        # 로그 기록 (agent_logs에 Gemini 요약 기록)
+        latency_ms = int((time.time() - start_time) * 1000)
+        _log_gemini_rag_summarization(
+            session_id=session_id,
+            query=query,
+            doc_count=len(documents),
+            input_chars=input_chars,
+            output_chars=len(output_text),
+            latency_ms=latency_ms
+        )
+
+        return output_text
 
     except Exception as e:
         print(f"[RAG] Gemini summarization failed: {e}")
         # 실패시 원본 문서 앞부분만 반환
         return "\n\n".join(doc[:500] for doc in documents[:3])
+
+
+def _log_gemini_rag_summarization(
+    session_id: str,
+    query: str,
+    doc_count: int,
+    input_chars: int,
+    output_chars: int,
+    latency_ms: int
+):
+    """Gemini RAG 요약 호출을 agent_logs DB에 기록"""
+    try:
+        from agent_scorecard import get_scorecard
+
+        scorecard = get_scorecard()
+        if not scorecard._initialized:
+            print("[RAG] Scorecard not initialized, skipping log")
+            return
+
+        # 토큰 추정 (한글 1자 ≈ 2토큰, 영문 4자 ≈ 1토큰)
+        input_tokens = input_chars // 3
+        output_tokens = output_chars // 3
+
+        task_summary = f"RAG 요약: {query[:50]}... ({doc_count}문서)"[:200]
+
+        log_id = scorecard.log_task(
+            session_id=session_id or "system",
+            task_id=f"gemini_rag_{latency_ms}",
+            role="summarizer",
+            engine="gemini",
+            model="gemini-2.0-flash",
+            task_type="rag_summarize",
+            task_summary=task_summary,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            latency_ms=latency_ms
+        )
+        print(f"[RAG] Gemini summarization logged: {log_id}")
+    except Exception as e:
+        print(f"[RAG] Failed to log Gemini call: {e}")
 
 
 # =============================================================================
