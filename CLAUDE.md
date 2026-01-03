@@ -86,7 +86,20 @@ hattz_empire/
 
 ## 최근 작업 내역 (2026-01-04)
 
-### 세션 4 (최신)
+### 세션 5 (최신)
+1. **CSS 반응형 추가 수정** - 80% 축소 시에도 버튼 안 잘리도록
+   - `.header-left`에 `min-width: 0`, `flex-shrink: 1`, `overflow: hidden`
+   - `.status` 텍스트("Ready") 숨김, 점만 표시
+   - `.admin-dropdown-btn` 패딩/폰트 축소 (6px 10px, 11px)
+   - `.abort-button` "중단" 텍스트 숨김, 아이콘만 표시
+   - `.processing-bar` 높이/패딩 축소 (44px, 10px 12px)
+   - `.processing-stage` 숨김 처리
+2. **Git 커밋 & 푸시** - `e6ad617` hattz_empire 저장소
+3. **대화 백업 & 임베딩** - 4개 새로 인덱싱 완료
+
+---
+
+### 세션 4
 1. **[CALL:agent] 태그 감지 문제 수정**
    - **문제**: PM이 `[CALL:coder]`, `[CALL:qa]` 출력해도 백엔드에서 감지 못함
    - **원인**: `executor.py`의 CALL_PATTERN 정규식이 `\n` 필수로 요구
