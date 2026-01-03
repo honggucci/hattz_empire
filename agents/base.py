@@ -6,11 +6,19 @@ from abc import ABC, abstractmethod
 from typing import Any, Optional
 from dataclasses import dataclass
 
-from ..config import (
-    DualEngineConfig, ModelConfig,
-    get_dual_engine, get_api_key, get_system_prompt
-)
-from ..stream import get_stream, StreamLogger
+# Import 호환성 (패키지/직접 실행 모두 지원)
+try:
+    from config import (
+        DualEngineConfig, ModelConfig,
+        get_dual_engine, get_api_key, get_system_prompt
+    )
+    from stream import get_stream, StreamLogger
+except ImportError:
+    from ..config import (
+        DualEngineConfig, ModelConfig,
+        get_dual_engine, get_api_key, get_system_prompt
+    )
+    from ..stream import get_stream, StreamLogger
 
 
 @dataclass

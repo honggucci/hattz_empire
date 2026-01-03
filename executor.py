@@ -410,6 +410,76 @@ def format_results(results: List[ExecutionResult]) -> str:
 
 
 # =============================================================================
+# [CALL] Tag Parser - PM이 다른 에이전트 호출
+# =============================================================================
+
+CALL_PATTERN = re.compile(
+    r'\[CALL:(\w+)\]\s*\n(.*?)(?=\[/CALL\]|\[CALL:|\Z)',
+    re.DOTALL
+)
+
+# 호출 가능한 에이전트 목록
+CALLABLE_AGENTS = {
+    "excavator": "코드 분석 전문가",
+    "coder": "코드 작성 전문가",
+    "qa": "품질 검증 전문가",
+    "researcher": "리서치 전문가",
+}
+
+
+@dataclass
+class CallRequest:
+    """에이전트 호출 요청"""
+    agent: str
+    message: str
+    raw: str
+
+
+def parse_call_tags(text: str) -> List[CallRequest]:
+    """
+    PM 응답에서 [CALL:agent] 태그 파싱
+
+    지원 형식:
+    - [CALL:excavator]
+      분석할 내용...
+      [/CALL]
+    - [CALL:coder]
+      구현할 내용...
+      [/CALL]
+    """
+    calls = []
+
+    for match in CALL_PATTERN.finditer(text):
+        agent = match.group(1).lower()
+        message = match.group(2).strip()
+
+        if agent in CALLABLE_AGENTS:
+            calls.append(CallRequest(
+                agent=agent,
+                message=message,
+                raw=match.group(0)
+            ))
+
+    return calls
+
+
+def has_call_tags(text: str) -> bool:
+    """텍스트에 [CALL:] 태그가 있는지 확인"""
+    return bool(CALL_PATTERN.search(text))
+
+
+def extract_call_info(text: str) -> List[Dict[str, str]]:
+    """
+    [CALL:] 태그 정보 추출 (API 응답용)
+
+    Returns:
+        List of {agent: str, message: str}
+    """
+    calls = parse_call_tags(text)
+    return [{"agent": c.agent, "message": c.message} for c in calls]
+
+
+# =============================================================================
 # Main Executor Function (for API endpoint)
 # =============================================================================
 

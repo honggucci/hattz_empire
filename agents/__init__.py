@@ -51,6 +51,15 @@ from .analyst import (
     get_analyst,
 )
 
+# Researcher (Gemini 3.0 + Claude Opus)
+from .researcher import (
+    Researcher,
+    ResearchOutput,
+    ResearchFinding,
+    WebSource,
+    get_researcher,
+)
+
 __all__ = [
     # Base
     "DualEngineAgent",
@@ -85,4 +94,11 @@ __all__ = [
     "Analyst",
     "AnalysisResult",
     "get_analyst",
+
+    # Researcher
+    "Researcher",
+    "ResearchOutput",
+    "ResearchFinding",
+    "WebSource",
+    "get_researcher",
 ]

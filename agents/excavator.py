@@ -15,7 +15,11 @@ except ImportError:
     HAS_YAML = False
 
 from .base import DualEngineAgent, EngineResponse, call_llm
-from ..config import ModelConfig, get_system_prompt
+
+try:
+    from config import ModelConfig, get_system_prompt
+except ImportError:
+    from ..config import ModelConfig, get_system_prompt
 
 
 @dataclass

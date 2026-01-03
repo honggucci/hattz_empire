@@ -12,7 +12,7 @@ const exportBtn = document.getElementById('export-btn');
 const newChatBtn = document.getElementById('new-chat-btn');
 const sessionItems = document.getElementById('session-items');
 
-// Fixed agent - PM only
+// Fixed agent - PM only (PM이 모든 대화의 중심)
 const currentAgent = 'pm';
 
 // Current project context
@@ -238,10 +238,32 @@ function removeLoading(id) {
 
 // Set status
 function setStatus(text, loading) {
-    const statusEl = document.querySelector('.status');
-    const dot = statusEl.querySelector('.status-dot');
-    statusEl.querySelector('span:last-child').textContent = text;
-    dot.classList.toggle('loading', loading);
+    const statusText = document.getElementById('status-text');
+    const dot = document.querySelector('.status-dot');
+    const processingBar = document.getElementById('processing-bar');
+    const processingText = processingBar?.querySelector('.processing-text');
+
+    // Update status text
+    if (statusText) {
+        statusText.textContent = text;
+    }
+
+    // Update status dot
+    if (dot) {
+        dot.classList.toggle('loading', loading);
+    }
+
+    // Show/hide processing bar
+    if (processingBar) {
+        if (loading) {
+            processingBar.classList.remove('hidden');
+            if (processingText) {
+                processingText.textContent = text === 'Thinking...' ? 'PM이 생각 중...' : text;
+            }
+        } else {
+            processingBar.classList.add('hidden');
+        }
+    }
 }
 
 // Clear chat
@@ -251,10 +273,11 @@ function clearChat() {
             <h2>Hattz Empire AI Team</h2>
             <p>비판적 스탠스로 무장한 AI 팀에게 질문하세요.</p>
             <div class="quick-actions">
-                <button class="quick-btn" data-msg="새로운 기능 추가하고 싶어">새 기능 요청</button>
-                <button class="quick-btn" data-msg="이 코드 리뷰해줘">코드 리뷰</button>
-                <button class="quick-btn" data-msg="전략 분석이 필요해">전략 분석</button>
-                <button class="quick-btn" data-msg="Hattz AI팀 시스템을 개선하고 싶어">AI팀 수정</button>
+                <button class="quick-btn" data-msg="새로운 기능 추가하고 싶어">💡 새 기능 요청</button>
+                <button class="quick-btn" data-action="code-review" data-msg="">🔍 코드 리뷰</button>
+                <button class="quick-btn" data-action="strategy" data-msg="">📊 전략 분석</button>
+                <button class="quick-btn" data-action="ai-team" data-msg="Hattz AI팀 시스템을 개선하고 싶어">🔧 AI팀 수정</button>
+                <button class="quick-btn" data-action="web-research" data-msg="외부 데이터를 검색해서 분석해줘">🌐 외부 검색</button>
             </div>
         </div>
     `;
@@ -288,8 +311,32 @@ function exportChat() {
 function attachQuickButtonListeners() {
     document.querySelectorAll('.quick-btn').forEach(btn => {
         btn.addEventListener('click', () => {
-            messageInput.value = btn.dataset.msg;
-            sendMessage();
+            const action = btn.dataset.action;
+
+            // 특수 액션 처리
+            if (action === 'ai-team') {
+                // AI팀 수정: hattz_empire 프로젝트 자동 선택
+                currentProject = 'hattz_empire';
+                projectSelect.value = 'hattz_empire';
+                messageInput.value = btn.dataset.msg;
+                sendMessage();
+            } else if (action === 'code-review') {
+                // 코드 리뷰: 특수 프롬프트
+                messageInput.value = "코드 리뷰 및 수정이 필요해!";
+                sendMessage();
+            } else if (action === 'strategy') {
+                // 전략 분석: 특수 프롬프트
+                messageInput.value = "최고의 전략을 짤 준비가 되셧나요? 책사여!! 세상을 평정해보자!!";
+                sendMessage();
+            } else if (action === 'web-research') {
+                // 외부 데이터 검색
+                messageInput.value = btn.dataset.msg;
+                sendMessage();
+            } else {
+                // 기본 동작
+                messageInput.value = btn.dataset.msg;
+                sendMessage();
+            }
         });
     });
 }
@@ -521,10 +568,11 @@ function showWelcomeMessage() {
             <h2>Hattz Empire AI Team</h2>
             <p>비판적 스탠스로 무장한 AI 팀에게 질문하세요.</p>
             <div class="quick-actions">
-                <button class="quick-btn" data-msg="새로운 기능 추가하고 싶어">새 기능 요청</button>
-                <button class="quick-btn" data-msg="이 코드 리뷰해줘">코드 리뷰</button>
-                <button class="quick-btn" data-msg="전략 분석이 필요해">전략 분석</button>
-                <button class="quick-btn" data-msg="Hattz AI팀 시스템을 개선하고 싶어">AI팀 수정</button>
+                <button class="quick-btn" data-msg="새로운 기능 추가하고 싶어">💡 새 기능 요청</button>
+                <button class="quick-btn" data-action="code-review" data-msg="">🔍 코드 리뷰</button>
+                <button class="quick-btn" data-action="strategy" data-msg="">📊 전략 분석</button>
+                <button class="quick-btn" data-action="ai-team" data-msg="Hattz AI팀 시스템을 개선하고 싶어">🔧 AI팀 수정</button>
+                <button class="quick-btn" data-action="web-research" data-msg="외부 데이터를 검색해서 분석해줘">🌐 외부 검색</button>
             </div>
         </div>
     `;

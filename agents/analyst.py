@@ -26,8 +26,13 @@ except ImportError:
     HAS_PSUTIL = False
 
 from .base import EngineResponse, APIClient
-from ..config import get_single_engine, get_system_prompt
-from ..stream import get_stream, StreamLogger
+
+try:
+    from config import get_single_engine, get_system_prompt
+    from stream import get_stream, StreamLogger
+except ImportError:
+    from ..config import get_single_engine, get_system_prompt
+    from ..stream import get_stream, StreamLogger
 
 
 @dataclass

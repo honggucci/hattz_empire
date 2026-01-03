@@ -401,6 +401,61 @@ body {
     50% { opacity: 0.3; }
 }
 
+/* Processing Bar - AI 작업 중 표시 */
+.processing-bar {
+    background: linear-gradient(90deg, var(--bg-tertiary) 0%, var(--bg-secondary) 100%);
+    padding: 12px 24px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    border-bottom: 1px solid var(--border-color);
+    position: relative;
+    overflow: hidden;
+}
+
+.processing-bar.hidden {
+    display: none;
+}
+
+.processing-progress {
+    position: absolute;
+    top: 0;
+    left: 0;
+    height: 3px;
+    width: 30%;
+    background: linear-gradient(90deg, var(--accent-blue), var(--accent-purple));
+    animation: progress-slide 1.5s ease-in-out infinite;
+}
+
+@keyframes progress-slide {
+    0% { left: -30%; }
+    100% { left: 100%; }
+}
+
+.processing-text {
+    font-size: 13px;
+    color: var(--accent-blue);
+    font-weight: 500;
+    animation: text-pulse 2s ease-in-out infinite;
+}
+
+@keyframes text-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+}
+
+.processing-bar::before {
+    content: '🤔';
+    font-size: 18px;
+    animation: thinking 2s ease-in-out infinite;
+}
+
+@keyframes thinking {
+    0%, 100% { transform: rotate(0deg); }
+    25% { transform: rotate(-10deg); }
+    75% { transform: rotate(10deg); }
+}
+
 /* Chat Messages */
 .chat-messages {
     flex: 1;
@@ -721,4 +776,82 @@ body {
         font-size: 12px;
         padding: 12px;
     }
+}
+
+/* Chain Mode Toggle */
+.input-options {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+
+.chain-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    user-select: none;
+}
+
+.chain-toggle input {
+    display: none;
+}
+
+.toggle-slider {
+    width: 36px;
+    height: 20px;
+    background-color: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    position: relative;
+    transition: all 0.3s;
+}
+
+.toggle-slider::after {
+    content: '';
+    position: absolute;
+    width: 14px;
+    height: 14px;
+    background-color: var(--text-secondary);
+    border-radius: 50%;
+    top: 2px;
+    left: 2px;
+    transition: all 0.3s;
+}
+
+.chain-toggle input:checked + .toggle-slider {
+    background-color: var(--accent-purple);
+    border-color: var(--accent-purple);
+}
+
+.chain-toggle input:checked + .toggle-slider::after {
+    left: 18px;
+    background-color: white;
+}
+
+.toggle-label {
+    font-size: 12px;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.chain-toggle input:checked ~ .toggle-label {
+    color: var(--accent-purple);
+}
+
+.chain-status {
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+.chain-status.active {
+    color: var(--accent-purple);
+}
+
+/* Chain mode badge */
+.agent-badge.chain {
+    background: linear-gradient(135deg, var(--accent-purple), var(--accent-blue));
+    color: white;
 }

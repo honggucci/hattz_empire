@@ -53,8 +53,14 @@
                 </div>
                 <span class="status">
                     <span class="status-dot"></span>
-                    Ready
+                    <span id="status-text">Ready</span>
                 </span>
+            </div>
+
+            <!-- AI Processing Bar -->
+            <div id="processing-bar" class="processing-bar hidden">
+                <div class="processing-progress"></div>
+                <span class="processing-text">PM이 생각 중...</span>
             </div>
 
             <div class="chat-messages" id="chat-messages">
@@ -63,9 +69,10 @@
                     <p>비판적 스탠스로 무장한 AI 팀에게 질문하세요.</p>
                     <div class="quick-actions">
                         <button class="quick-btn" data-msg="새로운 기능 추가하고 싶어">💡 새 기능 요청</button>
-                        <button class="quick-btn" data-msg="이 코드 리뷰해줘">🔍 코드 리뷰</button>
-                        <button class="quick-btn" data-msg="전략 분석이 필요해">📊 전략 분석</button>
-                        <button class="quick-btn" data-msg="Hattz AI팀 시스템을 개선하고 싶어">🔧 AI팀 수정</button>
+                        <button class="quick-btn" data-action="code-review" data-msg="">🔍 코드 리뷰</button>
+                        <button class="quick-btn" data-action="strategy" data-msg="">📊 전략 분석</button>
+                        <button class="quick-btn" data-action="ai-team" data-msg="Hattz AI팀 시스템을 개선하고 싶어">🔧 AI팀 수정</button>
+                        <button class="quick-btn" data-action="web-research" data-msg="외부 데이터를 검색해서 분석해줘">🌐 외부 검색</button>
                     </div>
                 </div>
             </div>

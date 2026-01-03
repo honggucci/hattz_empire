@@ -26,14 +26,6 @@ import executor
 import rag
 from auth import init_login, get_user, verify_password, User
 
-# Agent Chain (듀얼 엔진 에이전트 체인)
-try:
-    from agent_chain import get_chain, ChainResult, TaskType
-    AGENT_CHAIN_AVAILABLE = True
-except ImportError as e:
-    print(f"[WARNING] Agent chain not available: {e}")
-    AGENT_CHAIN_AVAILABLE = False
-
 # =============================================================================
 # LLM API Clients
 # =============================================================================
@@ -279,17 +271,18 @@ def chat():
     Request JSON:
     {
         "message": "사용자 메시지",
-        "agent": "pm",           # 단일 에이전트 모드
-        "mock": false,
-        "use_chain": false       # true면 에이전트 체인 사용 (Excavator→Coder→QA)
+        "agent": "pm",           # 에이전트 (기본: pm)
+        "mock": false
     }
+
+    PM은 [CALL:agent] 태그로 다른 에이전트를 호출할 수 있음.
+    시스템이 자동으로 감지하여 하위 에이전트 실행 후 결과를 PM에게 전달.
     """
     global current_session_id
     data = request.json
     user_message = data.get('message', '')
     agent_role = data.get('agent', 'pm')
     use_mock = data.get('mock', False)
-    use_chain = data.get('use_chain', False)  # 체인 모드 옵션
 
     if not user_message:
         return jsonify({'error': 'Message required'}), 400
@@ -301,43 +294,36 @@ def chat():
     # DB에 사용자 메시지 저장
     db.add_message(current_session_id, 'user', user_message, agent_role)
 
-    # 에이전트 체인 모드
-    if use_chain and AGENT_CHAIN_AVAILABLE:
-        try:
-            chain = get_chain()
-            result = chain.process(user_message)
-            response = result.final_response
-            agents_used = result.agents_called
-
-            # DB에 어시스턴트 응답 저장
-            db.add_message(current_session_id, 'assistant', response, 'chain')
-
-            return jsonify({
-                'response': response,
-                'agent': 'chain',
-                'agents_called': agents_used,
-                'task_type': result.task_type.value,
-                'timestamp': datetime.now().isoformat(),
-                'session_id': current_session_id
-            })
-        except Exception as e:
-            print(f"[Chain Error] {e}")
-            # 체인 실패시 단일 에이전트로 폴백
-            response = _call_agent(user_message, agent_role)
-    elif use_mock:
+    if use_mock:
         response = _mock_agent_response(user_message, agent_role)
     else:
         response = _call_agent(user_message, agent_role)
 
+    # [CALL:agent] 태그 처리 (PM 응답에서 하위 에이전트 호출)
+    agents_called = []
+    if executor.has_call_tags(response):
+        call_results = _process_call_tags(response)
+        agents_called = [c['agent'] for c in call_results]
+
+        # PM에게 하위 에이전트 결과 전달하여 최종 응답 생성
+        if call_results:
+            followup_prompt = _build_call_results_prompt(call_results)
+            response = _call_agent(followup_prompt, agent_role)
+
     # DB에 어시스턴트 응답 저장
     db.add_message(current_session_id, 'assistant', response, agent_role)
 
-    return jsonify({
+    result = {
         'response': response,
         'agent': agent_role,
         'timestamp': datetime.now().isoformat(),
         'session_id': current_session_id
-    })
+    }
+
+    if agents_called:
+        result['agents_called'] = agents_called
+
+    return jsonify(result)
 
 
 @app.route('/api/chat/stream', methods=['POST'])
@@ -848,101 +834,6 @@ def translate():
         return jsonify({'error': str(e)}), 500
 
 
-# =============================================================================
-# Agent Chain API
-# =============================================================================
-
-@app.route('/api/chain', methods=['POST'])
-def agent_chain():
-    """
-    에이전트 체인 API (Excavator → Coder → QA 자동 실행)
-
-    Request JSON:
-    {
-        "message": "CEO 입력",
-        "task_id": "optional task id"
-    }
-    """
-    global current_session_id
-
-    if not AGENT_CHAIN_AVAILABLE:
-        return jsonify({'error': 'Agent chain not available'}), 500
-
-    data = request.json
-    user_message = data.get('message', '')
-    task_id = data.get('task_id')
-
-    if not user_message:
-        return jsonify({'error': 'message is required'}), 400
-
-    # 세션 생성
-    if not current_session_id:
-        current_session_id = db.create_session(agent='chain')
-
-    # DB에 사용자 메시지 저장
-    db.add_message(current_session_id, 'user', user_message, 'chain')
-
-    try:
-        chain = get_chain()
-        result = chain.process(user_message, task_id=task_id)
-
-        # 응답 구성
-        response_data = {
-            'success': result.success,
-            'task_type': result.task_type.value,
-            'agents_called': result.agents_called,
-            'response': result.final_response,
-            'session_id': current_session_id
-        }
-
-        # 추가 정보
-        if result.excavation:
-            response_data['excavation'] = {
-                'explicit': result.excavation.explicit,
-                'implicit': result.excavation.implicit,
-                'confidence': result.excavation.confidence,
-                'perfectionism': result.excavation.perfectionism_detected
-            }
-
-        if result.code:
-            response_data['code'] = {
-                'code': result.code.code[:2000] if result.code.code else '',
-                'complexity': result.code.complexity,
-                'dependencies': result.code.dependencies
-            }
-
-        if result.qa_result:
-            response_data['qa'] = {
-                'status': result.qa_result.status,
-                'issues_count': len(result.qa_result.issues),
-                'confidence': result.qa_result.confidence
-            }
-
-        if result.error:
-            response_data['error'] = result.error
-
-        # DB에 응답 저장
-        db.add_message(current_session_id, 'assistant', result.final_response, 'chain')
-
-        return jsonify(response_data)
-
-    except Exception as e:
-        return jsonify({
-            'success': False,
-            'error': str(e),
-            'session_id': current_session_id
-        }), 500
-
-
-@app.route('/api/chain/status')
-def chain_status():
-    """에이전트 체인 상태 확인"""
-    return jsonify({
-        'available': AGENT_CHAIN_AVAILABLE,
-        'agents': ['excavator', 'coder', 'qa', 'strategist', 'analyst'] if AGENT_CHAIN_AVAILABLE else []
-    })
-
-
 @app.route('/api/projects/<project_id>/files')
 def get_project_files(project_id: str):
     """프로젝트 파일 목록 조회"""
@@ -972,6 +863,56 @@ def get_project_files(project_id: str):
         'project': project_id,
         'files': files[:100]  # 최대 100개
     })
+
+
+# =============================================================================
+# [CALL:agent] Tag Processing - PM이 하위 에이전트 호출
+# =============================================================================
+
+def _process_call_tags(pm_response: str) -> list:
+    """
+    PM 응답에서 [CALL:agent] 태그를 처리하고 하위 에이전트 실행
+
+    Returns:
+        List of {agent: str, message: str, response: str}
+    """
+    calls = executor.extract_call_info(pm_response)
+    results = []
+
+    for call in calls:
+        agent = call['agent']
+        message = call['message']
+
+        print(f"[CALL] PM → {agent}: {message[:100]}...")
+
+        # 하위 에이전트 호출 (번역 사용, 자동 실행)
+        response = _call_agent(message, agent, auto_execute=True, use_translation=False)
+
+        results.append({
+            'agent': agent,
+            'message': message,
+            'response': response
+        })
+
+        print(f"[CALL] {agent} 완료: {len(response)}자")
+
+    return results
+
+
+def _build_call_results_prompt(call_results: list) -> str:
+    """
+    하위 에이전트 결과를 PM에게 전달할 프롬프트 생성
+    """
+    prompt = "하위 에이전트들의 실행 결과입니다. 이 결과를 종합하여 CEO에게 보고해주세요.\n\n"
+
+    for i, result in enumerate(call_results, 1):
+        prompt += f"## {i}. {result['agent'].upper()} 응답\n"
+        prompt += f"**요청:** {result['message'][:200]}...\n\n"
+        prompt += f"**결과:**\n{result['response']}\n\n"
+        prompt += "---\n\n"
+
+    prompt += "위 결과들을 종합하여 CEO에게 한글로 보고해주세요."
+    return prompt
 
 
 def _call_agent(
