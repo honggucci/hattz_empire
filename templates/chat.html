@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hattz Empire - AI Orchestration</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="project-selector">
+                <h3>Project</h3>
+                <select id="project-select">
+                    <option value="">-- 프로젝트 선택 --</option>
+                </select>
+            </div>
+
+            <div class="sidebar-actions">
+                <button id="new-chat-btn" class="btn-primary">+ New Chat</button>
+            </div>
+
+            <div class="session-list">
+                <h3>Chat History</h3>
+                <div id="session-items">
+                    <!-- 세션 목록이 여기에 동적으로 추가됨 -->
+                </div>
+            </div>
+
+            <div class="sidebar-bottom">
+                <div class="sidebar-actions-bottom">
+                    <button id="clear-btn" class="btn-secondary">Clear</button>
+                    <button id="export-btn" class="btn-secondary">Export</button>
+                </div>
+
+                <div class="model-status">
+                    <span>Active Models</span>
+                    <button id="check-all-btn" class="check-all-btn" title="모든 API 테스트">⟳</button>
+                    <span class="health-overall" id="health-overall">⏳</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Chat Area -->
+        <main class="chat-main">
+            <div class="chat-header">
+                <div class="header-left">
+                    <a href="/" class="logo-mini">HATTZ</a>
+                    <span class="header-sep">|</span>
+                    <span id="current-agent">PM</span>
+                </div>
+                <span class="status">
+                    <span class="status-dot"></span>
+                    Ready
+                </span>
+            </div>
+
+            <div class="chat-messages" id="chat-messages">
+                <div class="welcome-message">
+                    <h2>Hattz Empire AI Team</h2>
+                    <p>비판적 스탠스로 무장한 AI 팀에게 질문하세요.</p>
+                    <div class="quick-actions">
+                        <button class="quick-btn" data-msg="새로운 기능 추가하고 싶어">💡 새 기능 요청</button>
+                        <button class="quick-btn" data-msg="이 코드 리뷰해줘">🔍 코드 리뷰</button>
+                        <button class="quick-btn" data-msg="전략 분석이 필요해">📊 전략 분석</button>
+                        <button class="quick-btn" data-msg="Hattz AI팀 시스템을 개선하고 싶어">🔧 AI팀 수정</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="chat-input-area">
+                <div class="input-container">
+                    <textarea
+                        id="message-input"
+                        placeholder="메시지를 입력하세요... (Shift+Enter: 줄바꿈, Enter: 전송)"
+                        rows="1"
+                    ></textarea>
+                    <button id="send-btn" class="send-button">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M22 2L11 13M22 2L15 22L11 13M11 13L2 9L22 2"/>
+                        </svg>
+                    </button>
+                </div>
+                <div class="input-hint">
+                    <span>오냐오냐 금지 | 비판적 스탠스 | 희망회로 금지</span>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/chat.js') }}"></script>
+</body>
+</html>

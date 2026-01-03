@@ -10,9 +10,12 @@ Hattz Empire - AI Orchestration System v2.0
 from dataclasses import dataclass, field
 from typing import Optional
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()
+# .env 파일 경로를 명시적으로 지정
+env_path = Path(__file__).parent / '.env'
+load_dotenv(env_path, override=True)
 
 
 @dataclass
@@ -24,6 +27,7 @@ class ModelConfig:
     api_key_env: str
     temperature: float = 0.7
     max_tokens: int = 4096
+    thinking_mode: bool = False  # GPT-5.2 Thinking Extend 모드
 
 
 @dataclass
@@ -114,23 +118,24 @@ MODELS = {
         max_tokens=8192,
     ),
 
-    # OpenAI
+    # OpenAI - Thinking Extend 모드 (max_tokens 증가, temperature 낮춤)
     "gpt_thinking": ModelConfig(
-        name="GPT-5.2 Thinking Extended",
+        name="GPT-5.2 Thinking",
         provider="openai",
-        model_id="gpt-5.2-thinking-extended",
+        model_id="gpt-5.2",
         api_key_env="OPENAI_API_KEY",
-        temperature=1.0,
-        max_tokens=8192,
+        temperature=0.2,  # 논리적 추론을 위해 낮춤
+        max_tokens=16384,  # Thinking Extend: 충분한 토큰
+        thinking_mode=True,
     ),
 
-    # Google
+    # Google - Gemini 3 Pro Preview (2026.01 최신)
     "gemini_pro": ModelConfig(
-        name="Gemini 3.0 Pro",
+        name="Gemini 3 Pro",
         provider="google",
-        model_id="gemini-3.0-pro",
+        model_id="gemini-3-pro-preview",
         api_key_env="GOOGLE_API_KEY",
-        temperature=0.3,
+        temperature=1.0,  # Gemini 3는 temperature 1.0 권장
         max_tokens=16384,
     ),
 }
@@ -341,6 +346,40 @@ confidence: 0.85
 클린하고 효율적인 코드를 작성하라.
 단, 모든 코드에 "이게 어떻게 터지는지"를 먼저 생각하라.
 
+## ⚡ EXECUTION CAPABILITY (실행 기능)
+너는 [EXEC] 태그를 사용해서 실제로 파일을 읽고, 수정하고, 명령어를 실행할 수 있다.
+
+### [EXEC] 태그 사용법:
+1. **파일 읽기**: [EXEC:read:파일경로]
+   예: [EXEC:read:C:/Users/hahonggu/Desktop/coin_master/projects/wpcn/main.py]
+
+2. **파일 쓰기**: [EXEC:write:파일경로] + 코드블록
+   예:
+   [EXEC:write:C:/Users/hahonggu/Desktop/coin_master/projects/wpcn/utils.py]
+   ```python
+   def helper():
+       return "new code"
+   ```
+
+3. **명령어 실행**: [EXEC:run:명령어]
+   예: [EXEC:run:git status]
+   예: [EXEC:run:pytest tests/]
+   예: [EXEC:run:python -m mypy src/]
+
+4. **디렉토리 목록**: [EXEC:list:디렉토리경로]
+   예: [EXEC:list:C:/Users/hahonggu/Desktop/coin_master/projects/wpcn]
+
+### 허용된 명령어:
+- Git: git status, git diff, git add, git commit, git push, git pull, git branch
+- Python: python, pytest, pip, mypy, black, flake8
+- Node: npm, npx, node, yarn
+
+### 실행 플로우:
+1. 먼저 파일/코드 상태 확인 [EXEC:read] 또는 [EXEC:list]
+2. 코드 작성/수정 [EXEC:write]
+3. 테스트 실행 [EXEC:run:pytest]
+4. 결과 확인 후 필요시 수정
+
 ## Standards
 - Python 3.12+
 - Type hints 필수
@@ -359,6 +398,11 @@ confidence: 0.85
 ```yaml
 design_summary: |
   5줄 이내 설계 요약
+
+execution_plan:  # 실행 계획 (NEW)
+  - action: "read/write/run"
+    target: "대상"
+    purpose: "목적"
 
 implementation:
   files_created: []
@@ -567,6 +611,26 @@ summary: "전체 요약"
 - 뜬구름/희망회로/'나중에' 금지
 - 비관론 과하면 조직 멈춤 → 적절한 균형
 
+## ⚡ EXECUTION CAPABILITY (실행 기능)
+너는 [EXEC] 태그를 사용해서 프로젝트 상태를 확인하고 명령어를 실행할 수 있다.
+
+### [EXEC] 태그 사용법:
+1. **프로젝트 파일 확인**: [EXEC:list:프로젝트경로]
+2. **파일 내용 확인**: [EXEC:read:파일경로]
+3. **Git 상태 확인**: [EXEC:run:git status]
+4. **테스트 실행**: [EXEC:run:pytest tests/]
+
+### PM이 사용하는 주요 명령어:
+- [EXEC:run:git status] - 현재 변경사항 확인
+- [EXEC:run:git log --oneline -5] - 최근 커밋 확인
+- [EXEC:list:프로젝트경로] - 프로젝트 구조 확인
+
+### 실행 플로우 (CODER에게 위임 전):
+1. 프로젝트 상태 확인 [EXEC:list] 또는 [EXEC:run:git status]
+2. 현재 코드 확인 [EXEC:read]
+3. CODER에게 구체적 작업 지시
+4. CODER 작업 후 검증 [EXEC:run:pytest]
+
 ## Language Policy
 - Receive: English (from Excavator after CEO confirmation)
 - Internal: English (with sub-agents)
@@ -703,8 +767,13 @@ metadata:
 PROJECTS = {
     "wpcn": {
         "name": "WPCN",
-        "description": "Wyckoff Probabilistic Crypto Navigator",
-        "path": "coin_master/wpcn-backtester-cli-noflask",
+        "description": "Wyckoff Probabilistic Crypto Navigator - 백테스터 CLI",
+        "path": "C:/Users/hahonggu/Desktop/coin_master/projects/wpcn-backtester-cli-noflask",
+    },
+    "youtube_ar": {
+        "name": "YouTube Video AR",
+        "description": "YouTube 영상 AR 프로젝트",
+        "path": "C:/Users/hahonggu/Desktop/coin_master/projects/yotuube_video_ar",
     },
 }
 
