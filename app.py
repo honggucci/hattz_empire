@@ -25,6 +25,9 @@ import database as db
 import executor
 import rag
 from auth import init_login, get_user, verify_password, User
+from agent_scorecard import get_scorecard, FeedbackType
+from router import get_router, route_message, route_and_call, TaskType, UrgencyLevel
+import background_tasks as bg
 
 # =============================================================================
 # LLM API Clients
@@ -272,7 +275,8 @@ def chat():
     {
         "message": "사용자 메시지",
         "agent": "pm",           # 에이전트 (기본: pm)
-        "mock": false
+        "mock": false,
+        "session_id": "session_xxx"  # 클라이언트에서 전달하는 세션 ID
     }
 
     PM은 [CALL:agent] 태그로 다른 에이전트를 호출할 수 있음.
@@ -283,12 +287,16 @@ def chat():
     user_message = data.get('message', '')
     agent_role = data.get('agent', 'pm')
     use_mock = data.get('mock', False)
+    client_session_id = data.get('session_id')  # 클라이언트에서 전달한 세션 ID
 
     if not user_message:
         return jsonify({'error': 'Message required'}), 400
 
+    # 클라이언트에서 전달한 세션 ID가 있으면 우선 사용
+    if client_session_id:
+        current_session_id = client_session_id
     # 세션이 없으면 새로 생성
-    if not current_session_id:
+    elif not current_session_id:
         current_session_id = db.create_session(agent=agent_role)
 
     # DB에 사용자 메시지 저장
@@ -334,12 +342,16 @@ def chat_stream():
     user_message = data.get('message', '')
     agent_role = data.get('agent', 'pm')
     use_mock = data.get('mock', False)
+    client_session_id = data.get('session_id')  # 클라이언트에서 전달한 세션 ID
 
     if not user_message:
         return jsonify({'error': 'Message required'}), 400
 
+    # 클라이언트에서 전달한 세션 ID가 있으면 우선 사용
+    if client_session_id:
+        current_session_id = client_session_id
     # 세션이 없으면 새로 생성
-    if not current_session_id:
+    elif not current_session_id:
         current_session_id = db.create_session(agent=agent_role)
 
     # DB에 사용자 메시지 저장
@@ -349,11 +361,20 @@ def chat_stream():
     session_id = current_session_id
 
     def generate() -> Generator[str, None, None]:
-        # 실제 LLM 호출 또는 Mock
+        # 첫 번째로 세션 ID 전송 (클라이언트가 새 세션인 경우 저장)
+        yield f"data: {json.dumps({'session_id': session_id}, ensure_ascii=False)}\n\n"
+
+        # 1단계: 생각 중
+        yield f"data: {json.dumps({'stage': 'thinking'}, ensure_ascii=False)}\n\n"
+
+        # 실제 LLM 호출 또는 Mock (이 안에서 EXEC, 분석 등 오래 걸리는 작업 수행)
         if use_mock:
             response = _mock_agent_response(user_message, agent_role)
         else:
             response = _call_agent(user_message, agent_role)
+
+        # 2단계: 응답 작성 중
+        yield f"data: {json.dumps({'stage': 'responding'}, ensure_ascii=False)}\n\n"
 
         # 스트리밍 시뮬레이션 (단어 단위) - 실제 스트리밍은 추후 구현
         words = response.split(' ')
@@ -364,8 +385,8 @@ def chat_stream():
             yield f"data: {json.dumps({'token': word + ' '}, ensure_ascii=False)}\n\n"
             time.sleep(0.02)
 
-        # 완료 신호
-        yield f"data: {json.dumps({'done': True, 'full_response': ' '.join(full_response)}, ensure_ascii=False)}\n\n"
+        # 완료 신호 (세션 ID도 다시 포함) - 이때만 프로그레스바 숨김
+        yield f"data: {json.dumps({'done': True, 'full_response': ' '.join(full_response), 'session_id': session_id}, ensure_ascii=False)}\n\n"
 
         # DB에 어시스턴트 응답 저장
         db.add_message(session_id, 'assistant', ' '.join(full_response), agent_role)
@@ -866,6 +887,194 @@ def get_project_files(project_id: str):
 
 
 # =============================================================================
+# Agent Scorecard API Endpoints
+# =============================================================================
+
+@app.route('/api/feedback', methods=['POST'])
+def submit_feedback():
+    """
+    CEO 피드백 제출 API
+
+    Request JSON:
+    {
+        "message_id": "msg_xxx",
+        "feedback_type": "ceo_approve" | "ceo_reject" | "ceo_redo",
+        "session_id": "session_xxx",
+        "note": "선택적 코멘트"
+    }
+    """
+    data = request.json
+    message_id = data.get('message_id')
+    feedback_type_str = data.get('feedback_type', '')
+    session_id = data.get('session_id')
+    note = data.get('note', '')
+
+    if not message_id or not feedback_type_str:
+        return jsonify({'error': 'message_id and feedback_type required'}), 400
+
+    # FeedbackType 매핑
+    feedback_map = {
+        'ceo_approve': FeedbackType.CEO_APPROVE,
+        'ceo_reject': FeedbackType.CEO_REJECT,
+        'ceo_redo': FeedbackType.CEO_REDO,
+    }
+
+    feedback_type = feedback_map.get(feedback_type_str)
+    if not feedback_type:
+        return jsonify({'error': f'Unknown feedback_type: {feedback_type_str}'}), 400
+
+    try:
+        scorecard = get_scorecard()
+
+        # 가장 최근 로그 ID 조회 (DB에서)
+        recent_log_id = scorecard.get_recent_log_id(session_id)
+
+        if recent_log_id:
+            # 피드백 추가 (DB에 저장)
+            from agent_scorecard import SCORE_RULES
+            score_delta = SCORE_RULES.get(feedback_type, 0)
+
+            scorecard.add_feedback(recent_log_id, feedback_type, note)
+
+            return jsonify({
+                'status': 'ok',
+                'log_id': recent_log_id,
+                'feedback': feedback_type_str,
+                'score_delta': score_delta
+            })
+        else:
+            return jsonify({
+                'status': 'ok',
+                'message': 'No logs to update, feedback recorded'
+            })
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/scores', methods=['GET'])
+def get_scores():
+    """
+    에이전트/모델 점수 조회 API
+
+    Query params:
+    - role: 특정 역할만 조회 (선택)
+    """
+    role = request.args.get('role')
+
+    try:
+        scorecard = get_scorecard()
+
+        if role:
+            return jsonify({
+                'role': role,
+                'summary': scorecard.get_role_summary(role)
+            })
+        else:
+            return jsonify({
+                'leaderboard': scorecard.get_leaderboard(),
+                'all_scores': scorecard.get_scores()
+            })
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/scores/best/<role>', methods=['GET'])
+def get_best_model(role: str):
+    """역할별 최고 점수 모델 조회 (동적 라우팅용)"""
+    try:
+        scorecard = get_scorecard()
+        best_model = scorecard.get_best_model(role)
+
+        return jsonify({
+            'role': role,
+            'best_model': best_model,
+            'summary': scorecard.get_role_summary(role)
+        })
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# =============================================================================
+# Router API Endpoints - HattzRouter 교통정리
+# =============================================================================
+
+@app.route('/api/router/analyze', methods=['POST'])
+def analyze_routing():
+    """
+    메시지 라우팅 분석 API
+
+    Request JSON:
+    {
+        "message": "분석할 메시지",
+        "agent": "pm"
+    }
+    """
+    data = request.json
+    message = data.get('message', '')
+    agent = data.get('agent', 'pm')
+
+    if not message:
+        return jsonify({'error': 'message required'}), 400
+
+    try:
+        routing = route_message(message, agent)
+        return jsonify({
+            'model_tier': routing.model_tier,
+            'model_id': routing.model_id,
+            'reason': routing.reason,
+            'estimated_tokens': routing.estimated_tokens,
+            'fallback_model': routing.fallback_model
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/router/stats', methods=['GET'])
+def router_stats():
+    """라우터 설정 통계"""
+    try:
+        router = get_router()
+        return jsonify(router.get_stats())
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/scores/dashboard', methods=['GET'])
+def get_dashboard():
+    """
+    스코어카드 대시보드 데이터
+
+    전체 통계, 리더보드, 역할별 요약
+    """
+    try:
+        scorecard = get_scorecard()
+
+        # 역할별 요약
+        roles = ['excavator', 'coder', 'strategist', 'qa', 'analyst', 'researcher', 'pm']
+        role_summaries = {}
+        for role in roles:
+            role_summaries[role] = scorecard.get_role_summary(role)
+
+        # 전체 통계
+        all_scores = scorecard.get_scores()
+        total_tasks = sum(s.get('total_tasks', 0) for s in all_scores.values()) if all_scores else 0
+
+        return jsonify({
+            'leaderboard': scorecard.get_leaderboard()[:10],  # Top 10
+            'role_summaries': role_summaries,
+            'total_logs': len(scorecard.logs),
+            'total_tasks': total_tasks,
+            'unique_models': len(all_scores)
+        })
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# =============================================================================
 # [CALL:agent] Tag Processing - PM이 하위 에이전트 호출
 # =============================================================================
 
@@ -919,18 +1128,30 @@ def _call_agent(
     message: str,
     agent_role: str,
     auto_execute: bool = True,
-    use_translation: bool = True
+    use_translation: bool = True,
+    use_router: bool = True  # 라우터 사용 여부 (듀얼 엔진 우회 가능)
 ) -> str:
     """
-    실제 LLM 호출 + [EXEC] 태그 자동 실행 + RAG 컨텍스트 주입 + 번역
+    실제 LLM 호출 + [EXEC] 태그 자동 실행 + RAG 컨텍스트 주입 + 번역 + 스코어카드 로깅
+    HattzRouter를 통한 동적 모델 라우팅 적용
 
     Args:
         message: 사용자 메시지
         agent_role: 에이전트 역할
         auto_execute: [EXEC] 태그 자동 실행 여부
         use_translation: 번역 레이어 사용 여부
+        use_router: HattzRouter 사용 여부 (False면 기존 듀얼엔진 사용)
     """
     global current_session_id
+    import time as time_module
+    start_time = time_module.time()
+
+    # HattzRouter: 메시지 분석 및 최적 모델 라우팅
+    router = get_router()
+    routing = route_message(message, agent_role)
+    print(f"[Router] {agent_role} → {routing.model_tier.upper()} ({routing.model_spec.name})")
+    print(f"[Router] Reason: {routing.reason}")
+
     system_prompt = get_system_prompt(agent_role)
     if not system_prompt:
         return f"[Error] Unknown agent role: {agent_role}"
@@ -970,31 +1191,117 @@ def _call_agent(
     # 현재 메시지 추가 (번역된 버전)
     messages.append({"role": "user", "content": agent_message})
 
-    # 듀얼 엔진 여부 확인
-    if agent_role in DUAL_ENGINES:
-        response = call_dual_engine(agent_role, messages, system_prompt)
+    # =========================================================================
+    # HattzRouter: 동적 모델 라우팅 (핵심 변경!)
+    # =========================================================================
+    if use_router:
+        # 라우터가 결정한 모델로 직접 호출
+        response = router.call_model(routing, messages, system_prompt)
+        print(f"[Router] Called: {routing.model_spec.name}")
+
+        # 로그 기록
+        stream = get_stream()
+        stream.log("ceo", agent_role, "request", agent_message)
+        stream.log(agent_role, "ceo", "response", response)
     else:
-        # 단일 엔진
-        model_config = SINGLE_ENGINES.get(agent_role)
-        if model_config:
-            response = call_llm(model_config, messages, system_prompt)
-            # 로그 기록
-            stream = get_stream()
-            stream.log("ceo", agent_role, "request", agent_message)
-            stream.log(agent_role, "ceo", "response", response)
+        # 기존 로직: 듀얼 엔진 또는 단일 엔진
+        if agent_role in DUAL_ENGINES:
+            response = call_dual_engine(agent_role, messages, system_prompt)
         else:
-            return f"[Error] No engine configured for: {agent_role}"
+            model_config = SINGLE_ENGINES.get(agent_role)
+            if model_config:
+                response = call_llm(model_config, messages, system_prompt)
+                stream = get_stream()
+                stream.log("ceo", agent_role, "request", agent_message)
+                stream.log(agent_role, "ceo", "response", response)
+            else:
+                return f"[Error] No engine configured for: {agent_role}"
 
     # [EXEC] 태그 자동 실행 (coder, pm 등 실행 가능한 에이전트)
     if auto_execute and agent_role in ["coder", "pm"]:
         exec_results = executor.execute_all(response)
         if exec_results:
-            response += executor.format_results(exec_results)
+            exec_output = executor.format_results(exec_results)
+
+            # PM에게 EXEC 결과 분석 요청 (후속 호출)
+            if agent_role == "pm":
+                followup_prompt = f"""## EXEC 실행 결과
+
+다음은 방금 요청한 명령어들의 실행 결과입니다:
+
+{exec_output}
+
+---
+
+위 실행 결과를 분석하여 CEO에게 보고해주세요:
+1. 핵심 발견 사항 (이모지 포함)
+2. 다음 액션 제안 (있다면)
+3. 주의점이나 리스크 (있다면)
+
+간결하게 한글로 보고해주세요."""
+
+                # 재귀 호출 방지: auto_execute=False로 후속 호출
+                analysis_response = _call_agent(
+                    followup_prompt,
+                    agent_role,
+                    auto_execute=False,  # EXEC 재실행 방지
+                    use_translation=False
+                )
+                response += f"\n\n---\n\n## 📋 EXEC 결과 분석\n\n{analysis_response}"
+            else:
+                # coder 등 다른 에이전트는 기존대로 결과만 추가
+                response += exec_output
 
     # 번역: 에이전트 응답(영어) → CEO(한국어)
     if use_translation and not rag.is_korean(response):
         response = rag.translate_for_ceo(response)
         print(f"[Translate] Agent→CEO: 한국어로 번역 완료")
+
+    # 스코어카드에 작업 로그 기록 (라우터 정보 포함)
+    try:
+        elapsed_ms = int((time_module.time() - start_time) * 1000)
+        scorecard = get_scorecard()
+
+        # 라우터가 선택한 모델 정보 사용
+        if use_router:
+            model_name = routing.model_spec.model_id
+            engine_type = f"router_{routing.model_tier}"
+        elif agent_role in DUAL_ENGINES:
+            model_name = DUAL_ENGINES[agent_role].engine_1.model_id
+            engine_type = "dual"
+        elif agent_role in SINGLE_ENGINES:
+            model_name = SINGLE_ENGINES[agent_role].model_id
+            engine_type = "single"
+        else:
+            model_name = "unknown"
+            engine_type = "unknown"
+
+        # 작업 타입 결정
+        task_type_map = {
+            'excavator': 'analysis',
+            'coder': 'code',
+            'strategist': 'strategy',
+            'qa': 'test',
+            'analyst': 'analysis',
+            'researcher': 'research',
+            'pm': 'orchestration'
+        }
+
+        scorecard.log_task(
+            session_id=current_session_id or "no_session",
+            task_id=f"task_{int(time_module.time())}",
+            role=agent_role,
+            engine=engine_type,
+            model=model_name,
+            task_type=task_type_map.get(agent_role, 'general'),
+            task_summary=message[:100],
+            input_tokens=len(message.split()) * 2,  # 대략적 추정
+            output_tokens=len(response.split()) * 2,
+            latency_ms=elapsed_ms
+        )
+        print(f"[Scorecard] Logged: {agent_role} → {model_name} ({elapsed_ms}ms)")
+    except Exception as e:
+        print(f"[Scorecard] Error: {e}")
 
     return response
 
@@ -1192,6 +1499,124 @@ metadata:
 ⚠️ 실제 LLM 연결 필요
 - config.py의 API 키 설정 확인
 - 에이전트별 LLM 호출 구현 필요""")
+
+
+# =============================================================================
+# Background Task API - 웹페이지 닫아도 계속 실행!
+# =============================================================================
+
+@app.route('/api/task/start', methods=['POST'])
+def start_background_task():
+    """
+    백그라운드 작업 시작 API
+
+    Request JSON:
+    {
+        "message": "분석해줘",
+        "agent": "pm",
+        "session_id": "session_xxx"
+    }
+
+    Response:
+    {
+        "task_id": "bg_1234567890_abc12345",
+        "status": "running"
+    }
+    """
+    data = request.json
+    message = data.get('message', '')
+    agent_role = data.get('agent', 'pm')
+    session_id = data.get('session_id')
+
+    if not message:
+        return jsonify({'error': 'message required'}), 400
+
+    if not session_id:
+        session_id = db.create_session(agent=agent_role)
+
+    # 작업 생성
+    task_id = bg.create_task(session_id, agent_role, message)
+
+    # DB에 사용자 메시지 저장
+    db.add_message(session_id, 'user', message, agent_role)
+
+    def worker(msg: str, role: str, progress_cb):
+        """실제 작업 수행 함수"""
+        progress_cb(10, "thinking")
+
+        # 실제 LLM 호출
+        response = _call_agent(msg, role)
+
+        progress_cb(90, "finalizing")
+
+        # DB에 응답 저장
+        db.add_message(session_id, 'assistant', response, role)
+
+        return response
+
+    # 백그라운드에서 실행 시작
+    bg.start_task(task_id, worker)
+
+    return jsonify({
+        'task_id': task_id,
+        'status': 'running',
+        'session_id': session_id
+    })
+
+
+@app.route('/api/task/<task_id>', methods=['GET'])
+def get_task_status(task_id: str):
+    """
+    작업 상태 조회 API
+
+    Response:
+    {
+        "id": "bg_xxx",
+        "status": "running" | "success" | "failed",
+        "progress": 50,
+        "stage": "thinking",
+        "result": "완료된 경우 결과",
+        "error": "실패한 경우 에러"
+    }
+    """
+    task = bg.get_task(task_id)
+
+    if not task:
+        return jsonify({'error': 'Task not found'}), 404
+
+    return jsonify(task)
+
+
+@app.route('/api/tasks', methods=['GET'])
+def get_session_tasks():
+    """
+    현재 세션의 모든 백그라운드 작업 조회
+
+    Query params:
+    - session_id: 세션 ID (필수)
+    """
+    session_id = request.args.get('session_id')
+
+    if not session_id:
+        return jsonify({'error': 'session_id required'}), 400
+
+    tasks = bg.get_tasks_by_session(session_id)
+
+    return jsonify({
+        'tasks': tasks,
+        'total': len(tasks)
+    })
+
+
+@app.route('/api/task/<task_id>/cancel', methods=['POST'])
+def cancel_background_task(task_id: str):
+    """작업 취소 API"""
+    success = bg.cancel_task(task_id)
+
+    if success:
+        return jsonify({'status': 'cancelled', 'task_id': task_id})
+    else:
+        return jsonify({'error': 'Cannot cancel task'}), 400
 
 
 if __name__ == '__main__':

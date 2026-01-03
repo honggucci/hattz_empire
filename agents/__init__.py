@@ -60,6 +60,13 @@ from .researcher import (
     get_researcher,
 )
 
+# Documentor (Gemini 3.0 + GPT-4o-mini) - 산출물/문서 작성
+from .documentor import (
+    Documentor,
+    DocumentResult,
+    get_documentor,
+)
+
 __all__ = [
     # Base
     "DualEngineAgent",
@@ -101,4 +108,9 @@ __all__ = [
     "ResearchFinding",
     "WebSource",
     "get_researcher",
+
+    # Documentor
+    "Documentor",
+    "DocumentResult",
+    "get_documentor",
 ]

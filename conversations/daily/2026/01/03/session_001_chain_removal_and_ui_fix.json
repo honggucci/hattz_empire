@@ -1,0 +1,153 @@
+{
+  "backup_info": {
+    "created_at": "2026-01-03",
+    "session": "001",
+    "priority": 1,
+    "feature": "Chain Mode 삭제 + PM 중심 구조 + UI 개선",
+    "version": "v1.1",
+    "description": "체인 모드 제거, [CALL:agent] 태그 시스템 도입, 프로그레스 바 추가"
+  },
+  "architecture_change": {
+    "before": {
+      "flow": "CEO → Chain Mode (Excavator → Coder → QA) 병렬 실행",
+      "problem": "PM 우회, CEO가 PM과만 대화해야 하는데 체인이 따로 돌아감"
+    },
+    "after": {
+      "flow": "CEO → PM → [CALL:agent] → 하위 에이전트 → PM 종합 → CEO 보고",
+      "benefit": "PM이 중심, 모든 에이전트 호출은 PM을 통해"
+    }
+  },
+  "files_deleted": [
+    {
+      "section": "app.py - Agent Chain API",
+      "lines": "약 90줄",
+      "endpoints": ["/api/chain", "/api/chain/status"]
+    },
+    {
+      "section": "app.py - agent_chain import",
+      "code": "from agent_chain import get_chain, ChainResult, TaskType"
+    }
+  ],
+  "files_modified": [
+    {
+      "path": "templates/chat.html",
+      "changes": [
+        "Chain mode toggle UI 삭제",
+        "Processing bar 추가 (AI 작업 중 표시)",
+        "status-text ID 추가"
+      ]
+    },
+    {
+      "path": "static/js/chat.js",
+      "changes": [
+        "chainModeToggle, chainStatus 변수 삭제",
+        "checkChainStatus(), updateChainStatus() 함수 삭제",
+        "setStatus() 함수 개선 - processing bar 연동",
+        "피드백 버튼 추가 (👍👎🔄)"
+      ]
+    },
+    {
+      "path": "static/css/style.css",
+      "changes": [
+        "processing-bar 스타일 추가",
+        "슬라이딩 그라데이션 애니메이션",
+        "🤔 이모지 흔들림 효과"
+      ]
+    },
+    {
+      "path": "executor.py",
+      "changes": [
+        "[CALL:agent] 태그 파서 추가",
+        "CALL_PATTERN regex",
+        "parse_call_tags(), has_call_tags(), extract_call_info() 함수",
+        "CALLABLE_AGENTS: excavator, coder, qa, researcher"
+      ]
+    },
+    {
+      "path": "config.py",
+      "changes": [
+        "PM 시스템 프롬프트에 [CALL:agent] 사용법 추가",
+        "WPCN 정확한 폴더 구조 추가 (_08_tuning이 튜닝, _06_engine은 엔진)",
+        "이모지 사용 규칙 추가 (15가지 상황별 이모지)",
+        "CEO 보고 규칙 추가 (로그 그대로 던지기 금지)"
+      ]
+    },
+    {
+      "path": "app.py",
+      "changes": [
+        "chat() 함수에서 체인 모드 코드 삭제",
+        "_process_call_tags() 함수 추가",
+        "_build_call_results_prompt() 함수 추가",
+        "[CALL:agent] 태그 자동 처리 로직"
+      ]
+    }
+  ],
+  "new_features": {
+    "call_tag_system": {
+      "description": "PM이 [CALL:agent] 태그로 하위 에이전트 호출",
+      "format": "[CALL:excavator]\\n메시지\\n[/CALL]",
+      "agents": ["excavator", "coder", "qa", "researcher"],
+      "flow": [
+        "1. PM 응답에서 [CALL:] 태그 감지",
+        "2. 각 에이전트 순차 호출",
+        "3. 결과 수집 후 PM에게 전달",
+        "4. PM이 종합하여 CEO에게 보고"
+      ]
+    },
+    "processing_bar": {
+      "description": "AI 작업 중 눈에 띄는 프로그레스 바",
+      "features": [
+        "슬라이딩 그라데이션 (파랑→보라)",
+        "🤔 이모지 흔들림 애니메이션",
+        "PM이 생각 중... 텍스트 펄스"
+      ]
+    },
+    "emoji_response_style": {
+      "description": "PM이 이모지로 핵심 표시",
+      "emojis": {
+        "✅": "완료/성공",
+        "❌": "실패/문제",
+        "⚠️": "경고/리스크",
+        "🚀": "시작/배포",
+        "🔧": "수정/작업중",
+        "💡": "아이디어",
+        "📊": "분석/데이터",
+        "🎯": "핵심/목표",
+        "🔥": "긴급/중요"
+      }
+    }
+  },
+  "bug_fixes": [
+    {
+      "issue": "Ready 상태 겹침",
+      "cause": "setStatus()가 span:last-child로 찾아서 잘못된 요소 업데이트",
+      "fix": "status-text ID 추가하고 getElementById로 정확히 찾음"
+    },
+    {
+      "issue": "PM이 _06_tuning 잘못된 경로 사용",
+      "cause": "LLM이 폴더명 추측",
+      "fix": "config.py에 WPCN 정확한 폴더 구조 명시"
+    }
+  ],
+  "wpcn_folder_structure": {
+    "_00_config": "설정",
+    "_01_crypto": "크립토 백테스트",
+    "_02_data": "데이터 처리",
+    "_03_common": "공통 모듈",
+    "_04_execution": "실행 엔진",
+    "_05_probability": "확률 계산",
+    "_06_engine": "백테스트 엔진 (튜닝 아님!)",
+    "_07_reporting": "리포팅",
+    "_08_tuning": "파라미터 튜닝 (✅ 여기!)",
+    "_09_cli": "CLI",
+    "_10_ai_team": "AI 팀",
+    "_11_flask": "Flask 웹",
+    "_99_legacy": "레거시"
+  },
+  "next_steps": [
+    "agent_chain.py 파일 삭제 (더 이상 사용 안 함)",
+    "[CALL:agent] 실제 테스트",
+    "피드백 버튼 백엔드 연동",
+    "로그인 페이지 접속 문제 디버깅"
+  ]
+}

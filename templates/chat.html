@@ -57,10 +57,21 @@
                 </span>
             </div>
 
-            <!-- AI Processing Bar -->
-            <div id="processing-bar" class="processing-bar hidden">
+            <!-- AI Processing Bar (개선 버전) -->
+            <div id="processing-bar" class="processing-bar hidden" data-stage="thinking">
                 <div class="processing-progress"></div>
-                <span class="processing-text">PM이 생각 중...</span>
+                <span class="processing-icon">🤔</span>
+                <div class="processing-content">
+                    <span class="processing-text">
+                        PM이 생각 중
+                        <span class="processing-dots">
+                            <span></span>
+                            <span></span>
+                            <span></span>
+                        </span>
+                    </span>
+                    <span class="processing-stage" id="processing-stage">ANALYZING REQUEST</span>
+                </div>
             </div>
 
             <div class="chat-messages" id="chat-messages">

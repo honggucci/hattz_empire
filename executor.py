@@ -384,24 +384,99 @@ def execute_all(text: str) -> List[ExecutionResult]:
     return results
 
 
+# 대용량 파일 요약 임계값
+LARGE_FILE_THRESHOLD = 10000  # 10KB 이상이면 Gemini로 요약
+
+
+def _summarize_with_gemini(content: str, file_path: str) -> str:
+    """
+    Gemini를 사용해 대용량 파일 요약/통계화
+
+    Gemini 3 Pro는 1M 토큰 컨텍스트로 대용량 처리에 최적
+    """
+    try:
+        import google.generativeai as genai
+        import os
+
+        api_key = os.getenv("GOOGLE_API_KEY")
+        if not api_key:
+            return f"[요약 불가: GOOGLE_API_KEY 없음]\n원본 크기: {len(content):,} bytes"
+
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel("gemini-2.0-flash")
+
+        # 파일 확장자로 타입 판단
+        ext = os.path.splitext(file_path)[1].lower()
+
+        if ext == ".json":
+            prompt = f"""다음은 대용량 JSON 파일입니다. 핵심 통계와 구조를 요약해주세요.
+
+## 요청
+1. 전체 구조 (최상위 키, 데이터 타입)
+2. 핵심 숫자/통계 (있다면)
+3. 주요 발견 사항 (문제점, 패턴 등)
+4. 데이터 품질 이슈 (있다면)
+
+## 파일 내용
+```json
+{content[:500000]}
+```
+
+## 출력 형식
+간결한 bullet point로 핵심만 요약. 한글로 작성."""
+        else:
+            prompt = f"""다음은 대용량 파일입니다. 핵심 내용을 요약해주세요.
+
+## 파일: {file_path}
+## 크기: {len(content):,} bytes
+
+## 내용
+```
+{content[:500000]}
+```
+
+## 요청
+- 핵심 내용 요약
+- 주요 통계/숫자
+- 발견된 패턴이나 이슈
+
+한글로 간결하게 작성."""
+
+        response = model.generate_content(prompt)
+
+        return f"""📊 **Gemini 요약** (원본: {len(content):,} bytes)
+
+{response.text}"""
+
+    except ImportError:
+        return f"[요약 불가: google-generativeai 미설치]\n원본 크기: {len(content):,} bytes"
+    except Exception as e:
+        return f"[요약 실패: {str(e)}]\n원본 크기: {len(content):,} bytes\n\n처음 2000자:\n{content[:2000]}"
+
+
 def format_results(results: List[ExecutionResult]) -> str:
-    """실행 결과를 포맷팅"""
+    """실행 결과를 포맷팅 (대용량은 Gemini로 요약)"""
     if not results:
         return ""
 
     output = "\n\n---\n## Execution Results\n"
 
     for i, result in enumerate(results, 1):
-        status = "" if result.success else ""
+        status = "✅" if result.success else "❌"
         output += f"\n### {i}. [{result.action}] {result.target}\n"
         output += f"**Status:** {status} {'Success' if result.success else 'Failed'}\n"
 
         if result.output:
-            # 긴 출력은 truncate
-            display_output = result.output[:2000]
-            if len(result.output) > 2000:
-                display_output += f"\n... (truncated, {len(result.output)} total chars)"
-            output += f"```\n{display_output}\n```\n"
+            content_size = len(result.output)
+
+            if content_size > LARGE_FILE_THRESHOLD:
+                # 대용량 파일 → Gemini로 요약
+                print(f"[Executor] Large file detected ({content_size:,} bytes), summarizing with Gemini...")
+                summarized = _summarize_with_gemini(result.output, result.target)
+                output += f"\n{summarized}\n"
+            else:
+                # 일반 파일 → 그대로 출력
+                output += f"```\n{result.output}\n```\n"
 
         if result.error:
             output += f"**Error:** {result.error}\n"

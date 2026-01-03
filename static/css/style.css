@@ -401,16 +401,28 @@ body {
     50% { opacity: 0.3; }
 }
 
-/* Processing Bar - AI 작업 중 표시 */
+/* Processing Bar - AI 작업 중 표시 (개선 버전) */
 .processing-bar {
-    background: linear-gradient(90deg, var(--bg-tertiary) 0%, var(--bg-secondary) 100%);
-    padding: 12px 24px;
+    background: linear-gradient(135deg,
+        rgba(88, 166, 255, 0.1) 0%,
+        rgba(163, 113, 247, 0.1) 50%,
+        rgba(88, 166, 255, 0.1) 100%);
+    background-size: 200% 200%;
+    animation: gradient-flow 3s ease infinite;
+    padding: 16px 24px;
     display: flex;
     align-items: center;
     gap: 16px;
-    border-bottom: 1px solid var(--border-color);
+    border-bottom: 2px solid var(--accent-purple);
     position: relative;
     overflow: hidden;
+    box-shadow: 0 4px 20px rgba(163, 113, 247, 0.2);
+}
+
+@keyframes gradient-flow {
+    0% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+    100% { background-position: 0% 50%; }
 }
 
 .processing-bar.hidden {
@@ -421,39 +433,113 @@ body {
     position: absolute;
     top: 0;
     left: 0;
-    height: 3px;
-    width: 30%;
-    background: linear-gradient(90deg, var(--accent-blue), var(--accent-purple));
-    animation: progress-slide 1.5s ease-in-out infinite;
+    height: 4px;
+    width: 100%;
+    background: linear-gradient(90deg,
+        transparent 0%,
+        var(--accent-blue) 20%,
+        var(--accent-purple) 50%,
+        var(--accent-blue) 80%,
+        transparent 100%);
+    background-size: 200% 100%;
+    animation: progress-shimmer 1.5s linear infinite;
 }
 
-@keyframes progress-slide {
-    0% { left: -30%; }
-    100% { left: 100%; }
+@keyframes progress-shimmer {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+
+.processing-icon {
+    font-size: 24px;
+    animation: bounce-rotate 1s ease-in-out infinite;
+    filter: drop-shadow(0 0 8px rgba(163, 113, 247, 0.6));
+}
+
+@keyframes bounce-rotate {
+    0%, 100% {
+        transform: translateY(0) rotate(0deg);
+    }
+    25% {
+        transform: translateY(-3px) rotate(-5deg);
+    }
+    50% {
+        transform: translateY(0) rotate(0deg);
+    }
+    75% {
+        transform: translateY(-3px) rotate(5deg);
+    }
+}
+
+.processing-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
 }
 
 .processing-text {
-    font-size: 13px;
-    color: var(--accent-blue);
-    font-weight: 500;
-    animation: text-pulse 2s ease-in-out infinite;
+    font-size: 14px;
+    color: var(--accent-purple);
+    font-weight: 600;
+    text-shadow: 0 0 10px rgba(163, 113, 247, 0.4);
 }
 
-@keyframes text-pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.6; }
+.processing-dots {
+    display: inline-flex;
+    gap: 4px;
+    margin-left: 4px;
+}
+
+.processing-dots span {
+    width: 6px;
+    height: 6px;
+    background: var(--accent-purple);
+    border-radius: 50%;
+    animation: dot-bounce 1.4s infinite ease-in-out;
+}
+
+.processing-dots span:nth-child(1) { animation-delay: 0s; }
+.processing-dots span:nth-child(2) { animation-delay: 0.2s; }
+.processing-dots span:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes dot-bounce {
+    0%, 80%, 100% {
+        transform: scale(0.6);
+        opacity: 0.5;
+    }
+    40% {
+        transform: scale(1);
+        opacity: 1;
+    }
+}
+
+.processing-stage {
+    font-size: 11px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 1px;
 }
 
 .processing-bar::before {
-    content: '🤔';
-    font-size: 18px;
-    animation: thinking 2s ease-in-out infinite;
+    content: '';  /* 아이콘은 JS에서 처리 */
 }
 
-@keyframes thinking {
-    0%, 100% { transform: rotate(0deg); }
-    25% { transform: rotate(-10deg); }
-    75% { transform: rotate(10deg); }
+/* 작업 단계별 스타일 */
+.processing-bar[data-stage="thinking"] {
+    border-color: var(--accent-blue);
+}
+
+.processing-bar[data-stage="calling"] {
+    border-color: var(--accent-purple);
+}
+
+.processing-bar[data-stage="executing"] {
+    border-color: var(--accent-green);
+}
+
+.processing-bar[data-stage="analyzing"] {
+    border-color: var(--accent-yellow);
 }
 
 /* Chat Messages */
@@ -854,4 +940,239 @@ body {
 .agent-badge.chain {
     background: linear-gradient(135deg, var(--accent-purple), var(--accent-blue));
     color: white;
+}
+
+/* =============================================================================
+   CEO Feedback Buttons
+   ============================================================================= */
+
+.feedback-buttons {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border-color);
+}
+
+.feedback-btn {
+    padding: 6px 12px;
+    background-color: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 14px;
+    transition: all 0.2s;
+    opacity: 0.7;
+}
+
+.feedback-btn:hover {
+    opacity: 1;
+    transform: scale(1.05);
+}
+
+.feedback-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.3;
+}
+
+.feedback-btn.approve:hover {
+    background-color: rgba(63, 185, 80, 0.2);
+    border-color: var(--accent-green);
+}
+
+.feedback-btn.reject:hover {
+    background-color: rgba(248, 81, 73, 0.2);
+    border-color: var(--accent-red);
+}
+
+.feedback-btn.redo:hover {
+    background-color: rgba(210, 153, 34, 0.2);
+    border-color: var(--accent-yellow);
+}
+
+.feedback-result {
+    font-size: 12px;
+    padding: 6px 12px;
+    border-radius: 6px;
+    animation: fadeIn 0.3s ease-out;
+}
+
+.feedback-result.success {
+    background-color: rgba(63, 185, 80, 0.15);
+    color: var(--accent-green);
+    border: 1px solid var(--accent-green);
+}
+
+.feedback-result.fail {
+    background-color: rgba(248, 81, 73, 0.15);
+    color: var(--accent-red);
+    border: 1px solid var(--accent-red);
+}
+
+.feedback-result.redo {
+    background-color: rgba(210, 153, 34, 0.15);
+    color: var(--accent-yellow);
+    border: 1px solid var(--accent-yellow);
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(-5px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* Score Display (optional sidebar widget) */
+#score-display {
+    margin-top: 12px;
+    padding: 10px;
+    background-color: var(--bg-tertiary);
+    border-radius: 6px;
+    font-size: 11px;
+}
+
+.score-item {
+    padding: 4px 0;
+    color: var(--text-secondary);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.score-item:last-child {
+    border-bottom: none;
+}
+
+/* =============================================================================
+   Background Tasks - 웹 닫아도 계속 실행!
+   ============================================================================= */
+
+.background-tasks-area {
+    position: fixed;
+    top: 80px;
+    right: 20px;
+    width: 320px;
+    max-height: 400px;
+    overflow-y: auto;
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.background-task-item {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    padding: 12px 16px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+    animation: slideInRight 0.3s ease-out;
+    transition: all 0.3s ease;
+}
+
+@keyframes slideInRight {
+    from {
+        transform: translateX(100%);
+        opacity: 0;
+    }
+    to {
+        transform: translateX(0);
+        opacity: 1;
+    }
+}
+
+.background-task-item.running {
+    border-color: var(--accent-blue);
+    background: linear-gradient(135deg,
+        rgba(88, 166, 255, 0.1) 0%,
+        var(--bg-secondary) 100%);
+}
+
+.background-task-item.running .task-icon {
+    animation: spin 1.5s linear infinite;
+}
+
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+.background-task-item.completed {
+    border-color: var(--accent-green);
+    background: linear-gradient(135deg,
+        rgba(63, 185, 80, 0.15) 0%,
+        var(--bg-secondary) 100%);
+}
+
+.background-task-item.failed {
+    border-color: var(--accent-red);
+    background: linear-gradient(135deg,
+        rgba(248, 81, 73, 0.15) 0%,
+        var(--bg-secondary) 100%);
+}
+
+.task-icon {
+    font-size: 20px;
+    min-width: 28px;
+    text-align: center;
+}
+
+.task-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.task-message {
+    font-size: 13px;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-bottom: 6px;
+}
+
+.task-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.status-text {
+    font-size: 11px;
+    color: var(--text-muted);
+    min-width: 70px;
+}
+
+.progress-bar {
+    flex: 1;
+    height: 4px;
+    background: var(--bg-tertiary);
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent-blue), var(--accent-purple));
+    border-radius: 2px;
+    transition: width 0.5s ease;
+}
+
+.background-task-item.completed .progress-fill {
+    background: var(--accent-green);
+}
+
+.task-cancel {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 4px 8px;
+    font-size: 14px;
+    opacity: 0.6;
+    transition: all 0.2s;
+}
+
+.task-cancel:hover {
+    opacity: 1;
+    color: var(--accent-red);
 }

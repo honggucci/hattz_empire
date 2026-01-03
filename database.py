@@ -265,6 +265,249 @@ def run_soft_delete_migration() -> Dict[str, Any]:
 
 
 # =============================================================================
+# Agent Logs CRUD
+# =============================================================================
+
+def create_agent_logs_table() -> bool:
+    """agent_logs 테이블 생성 (없으면)"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'agent_logs')
+            BEGIN
+                CREATE TABLE agent_logs (
+                    id VARCHAR(100) PRIMARY KEY,
+                    session_id VARCHAR(50),
+                    task_id VARCHAR(50),
+                    role VARCHAR(30),
+                    engine VARCHAR(20),
+                    model VARCHAR(100),
+                    task_type VARCHAR(30),
+                    task_summary NVARCHAR(200),
+                    input_tokens INT DEFAULT 0,
+                    output_tokens INT DEFAULT 0,
+                    latency_ms INT DEFAULT 0,
+                    cost_usd DECIMAL(12, 6) DEFAULT 0,
+                    result VARCHAR(20) DEFAULT 'pending',
+                    result_code VARCHAR(50) NULL,
+                    feedback VARCHAR(30) NULL,
+                    feedback_timestamp DATETIME NULL,
+                    feedback_note NVARCHAR(500) NULL,
+                    score_delta INT DEFAULT 0,
+                    created_at DATETIME DEFAULT GETDATE()
+                );
+                CREATE INDEX idx_agent_logs_session ON agent_logs(session_id);
+                CREATE INDEX idx_agent_logs_role ON agent_logs(role);
+                CREATE INDEX idx_agent_logs_model ON agent_logs(model);
+                CREATE INDEX idx_agent_logs_created ON agent_logs(created_at);
+            END
+        """)
+        conn.commit()
+        return True
+
+
+def add_agent_log(
+    log_id: str,
+    session_id: str,
+    task_id: str,
+    role: str,
+    engine: str,
+    model: str,
+    task_type: str,
+    task_summary: str,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+    latency_ms: int = 0,
+    cost_usd: float = 0.0,
+    result: str = "pending"
+) -> bool:
+    """에이전트 로그 추가"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO agent_logs (
+                id, session_id, task_id, role, engine, model,
+                task_type, task_summary, input_tokens, output_tokens,
+                latency_ms, cost_usd, result
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            log_id, session_id, task_id, role, engine, model,
+            task_type, task_summary[:200], input_tokens, output_tokens,
+            latency_ms, cost_usd, result
+        ))
+        conn.commit()
+        return True
+
+
+def add_agent_feedback(
+    log_id: str,
+    feedback: str,
+    score_delta: int,
+    note: Optional[str] = None,
+    result: Optional[str] = None
+) -> bool:
+    """에이전트 로그에 피드백 추가"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        updates = [
+            "feedback = ?",
+            "feedback_timestamp = GETDATE()",
+            "score_delta = ?"
+        ]
+        params = [feedback, score_delta]
+
+        if note:
+            updates.append("feedback_note = ?")
+            params.append(note)
+        if result:
+            updates.append("result = ?")
+            params.append(result)
+
+        params.append(log_id)
+        cursor.execute(f"""
+            UPDATE agent_logs
+            SET {', '.join(updates)}
+            WHERE id = ?
+        """, params)
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+def get_agent_logs(
+    session_id: Optional[str] = None,
+    role: Optional[str] = None,
+    limit: int = 100
+) -> List[Dict[str, Any]]:
+    """에이전트 로그 조회"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+
+        where_clauses = []
+        params = []
+
+        if session_id:
+            where_clauses.append("session_id = ?")
+            params.append(session_id)
+        if role:
+            where_clauses.append("role = ?")
+            params.append(role)
+
+        where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+        params.append(limit)
+
+        cursor.execute(f"""
+            SELECT TOP (?)
+                id, session_id, task_id, role, engine, model,
+                task_type, task_summary, input_tokens, output_tokens,
+                latency_ms, cost_usd, result, result_code,
+                feedback, feedback_timestamp, feedback_note, score_delta,
+                created_at
+            FROM agent_logs
+            {where_sql}
+            ORDER BY created_at DESC
+        """, params[::-1])  # limit을 마지막에서 처음으로
+
+        logs = []
+        for row in cursor.fetchall():
+            logs.append({
+                "id": row.id,
+                "session_id": row.session_id,
+                "task_id": row.task_id,
+                "role": row.role,
+                "engine": row.engine,
+                "model": row.model,
+                "task_type": row.task_type,
+                "task_summary": row.task_summary,
+                "input_tokens": row.input_tokens,
+                "output_tokens": row.output_tokens,
+                "latency_ms": row.latency_ms,
+                "cost_usd": float(row.cost_usd) if row.cost_usd else 0,
+                "result": row.result,
+                "result_code": row.result_code,
+                "feedback": row.feedback,
+                "feedback_timestamp": row.feedback_timestamp.isoformat() if row.feedback_timestamp else None,
+                "feedback_note": row.feedback_note,
+                "score_delta": row.score_delta or 0,
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+            })
+        return logs
+
+
+def get_model_scores() -> List[Dict[str, Any]]:
+    """모델별 점수 집계"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT
+                model,
+                role,
+                100 + ISNULL(SUM(score_delta), 0) as total_score,
+                COUNT(*) as total_tasks,
+                SUM(CASE WHEN result = 'success' THEN 1 ELSE 0 END) as success_count,
+                SUM(CASE WHEN result = 'failure' THEN 1 ELSE 0 END) as failure_count,
+                SUM(CASE WHEN feedback = 'ceo_approve' THEN 1 ELSE 0 END) as ceo_approve_count,
+                SUM(CASE WHEN feedback = 'ceo_reject' THEN 1 ELSE 0 END) as ceo_reject_count,
+                SUM(cost_usd) as total_cost,
+                AVG(latency_ms) as avg_latency
+            FROM agent_logs
+            GROUP BY model, role
+            ORDER BY total_score DESC
+        """)
+
+        scores = []
+        for row in cursor.fetchall():
+            total = row.ceo_approve_count + row.ceo_reject_count
+            approval_rate = row.ceo_approve_count / total if total > 0 else 0
+            success_rate = row.success_count / row.total_tasks if row.total_tasks > 0 else 0
+
+            scores.append({
+                "model": row.model,
+                "role": row.role,
+                "total_score": row.total_score,
+                "total_tasks": row.total_tasks,
+                "success_rate": f"{success_rate:.1%}",
+                "ceo_approval_rate": f"{approval_rate:.1%}",
+                "total_cost_usd": f"${float(row.total_cost or 0):.4f}",
+                "avg_latency_ms": f"{row.avg_latency or 0:.0f}ms",
+            })
+        return scores
+
+
+def get_best_model_for_role(role: str) -> Optional[str]:
+    """역할별 최고 점수 모델 조회"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT TOP 1 model
+            FROM agent_logs
+            WHERE role = ?
+            GROUP BY model
+            ORDER BY 100 + ISNULL(SUM(score_delta), 0) DESC
+        """, (role,))
+        row = cursor.fetchone()
+        return row.model if row else None
+
+
+def get_recent_log_id(session_id: Optional[str] = None) -> Optional[str]:
+    """가장 최근 로그 ID 조회"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        if session_id:
+            cursor.execute("""
+                SELECT TOP 1 id FROM agent_logs
+                WHERE session_id = ?
+                ORDER BY created_at DESC
+            """, (session_id,))
+        else:
+            cursor.execute("""
+                SELECT TOP 1 id FROM agent_logs
+                ORDER BY created_at DESC
+            """)
+        row = cursor.fetchone()
+        return row.id if row else None
+
+
+# =============================================================================
 # Health Check
 # =============================================================================
 
