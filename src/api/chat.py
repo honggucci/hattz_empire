@@ -165,7 +165,11 @@ def chat_stream():
             db.add_message(session_id, 'assistant', pm_response, agent_role)
 
             # [CALL:agent] 태그 처리
-            if executor.has_call_tags(pm_response):
+            has_calls = executor.has_call_tags(pm_response)
+            print(f"[DEBUG] has_call_tags: {has_calls}")
+            print(f"[DEBUG] PM response (last 500 chars): {pm_response[-500:]}")
+
+            if has_calls:
                 call_infos = executor.extract_call_info(pm_response)
                 total_calls = len(call_infos)
 

@@ -544,8 +544,11 @@ def format_results(results: List[ExecutionResult]) -> str:
 # [CALL] Tag Parser - PM이 다른 에이전트 호출
 # =============================================================================
 
+# CALL 태그 패턴 (줄바꿈 유무 모두 지원)
+# 형식 1: [CALL:agent]\n메시지\n[/CALL]
+# 형식 2: [CALL:agent] 메시지 (줄바꿈 없이)
 CALL_PATTERN = re.compile(
-    r'\[CALL:(\w+)\]\s*\n(.*?)(?=\[/CALL\]|\[CALL:|\Z)',
+    r'\[CALL:(\w+)\][\s\n]*(.*?)(?=\[/CALL\]|\[CALL:|\Z)',
     re.DOTALL
 )
 
@@ -554,7 +557,10 @@ CALLABLE_AGENTS = {
     "excavator": "코드 분석 전문가",
     "coder": "코드 작성 전문가",
     "qa": "품질 검증 전문가",
+    "qa_logic": "로직 검증 전문가",
     "researcher": "리서치 전문가",
+    "strategist": "전략 분석 전문가",
+    "analyst": "데이터 분석 전문가",
 }
 
 

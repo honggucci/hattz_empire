@@ -13,7 +13,10 @@
       "Bash(git branch:*)",
       "Bash(git push:*)",
       "Bash(git commit:*)",
-      "Bash(git checkout:*)"
+      "Bash(git checkout:*)",
+      "Bash(git merge:*)",
+      "Bash(git stash:*)",
+      "Bash(git merge QWAS-SYS-15M-V1 -m \"$\\(cat <<''EOF''\nMerge branch ''QWAS-SYS-15M-V1'' into main\n\nQWAS-SYS-15M-V1 기능 통합:\n- V3 Wiring 완료 \\(Optuna/Constraint/Reducer 통합\\)\n- BTC-USDT 15m/1h 파라미터 최적화 결과\n- 병렬 배치 최적화 스크립트 추가\n- Walk-forward 튜닝 결과\n\n🤖 Generated with [Claude Code]\\(https://claude.com/claude-code\\)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")"
     ]
   }
 }
