@@ -1,0 +1,122 @@
+{
+  "backup_info": {
+    "created_at": "2026-01-03",
+    "priority": 1,
+    "feature": "Login System + Git Branch Setup",
+    "version": "v1.0",
+    "description": "Flask-Login 기반 인증 시스템 구현 및 dev 브랜치 생성"
+  },
+  "commits": [
+    {
+      "hash": "ec5bf07",
+      "message": "feat: Add RAG system with Gemini summarization and project path fix",
+      "branch": "master",
+      "changes": [
+        "rag.py - RAG 시스템 (OpenAI 임베딩 + Gemini 요약 + 번역 레이어)",
+        "database.py - soft delete 마이그레이션",
+        "config.py - PM 시스템 프롬프트에 프로젝트 경로 테이블 추가",
+        "app.py - executor/RAG API 엔드포인트",
+        "migrations/ - SQL 마이그레이션 파일"
+      ]
+    }
+  ],
+  "branches": {
+    "master": "운영 브랜치",
+    "dev": "개발 브랜치 (새로 생성)"
+  },
+  "files_created": [
+    {
+      "path": "auth.py",
+      "action": "NEW",
+      "description": "Flask-Login 기반 인증 모듈"
+    },
+    {
+      "path": "templates/login.html",
+      "action": "NEW",
+      "description": "로그인 페이지 템플릿"
+    }
+  ],
+  "files_modified": [
+    {
+      "path": "app.py",
+      "action": "MODIFIED",
+      "changes": [
+        "Flask-Login import 추가",
+        "init_login(app) 초기화",
+        "/login, /logout 라우트 추가",
+        "@login_required 데코레이터 적용"
+      ]
+    }
+  ],
+  "auth_module": {
+    "file": "auth.py",
+    "classes": [
+      {
+        "name": "User",
+        "parent": "UserMixin",
+        "fields": ["id", "username", "role"],
+        "methods": ["is_admin()"]
+      }
+    ],
+    "functions": [
+      "_hash_password(password) - SHA256 해싱",
+      "get_user(username) - 사용자 조회",
+      "get_user_by_id(user_id) - ID로 조회",
+      "verify_password(username, password) - 비밀번호 검증",
+      "add_user(username, password, role) - 사용자 추가",
+      "init_login(app) - Flask-Login 초기화",
+      "admin_required(f) - 관리자 권한 데코레이터"
+    ],
+    "default_users": {
+      "admin": {
+        "password": "admin",
+        "role": "admin"
+      }
+    }
+  },
+  "login_routes": [
+    {
+      "path": "/login",
+      "methods": ["GET", "POST"],
+      "description": "로그인 페이지 및 처리"
+    },
+    {
+      "path": "/logout",
+      "methods": ["GET"],
+      "description": "로그아웃 (login_required)"
+    },
+    {
+      "path": "/",
+      "description": "메인 페이지 (login_required 적용)"
+    }
+  ],
+  "login_page_features": [
+    "다크 테마 (JetBrains Mono 폰트)",
+    "Remember me 체크박스",
+    "에러 메시지 표시",
+    "자동 리다이렉트 (next 파라미터)"
+  ],
+  "issue_investigated": {
+    "problem": "PM 에이전트가 C:/dev/wpcn 경로를 환각(hallucination)함",
+    "actual_path": "C:/Users/hahonggu/Desktop/coin_master/projects/wpcn-backtester-cli-noflask",
+    "root_cause": "LLM이 경로를 추측함 (RAG에서 가져온 것 아님)",
+    "solution": "config.py PM 시스템 프롬프트에 명시적 프로젝트 경로 테이블 추가",
+    "executor_security": {
+      "ALLOWED_BASE_PATHS": [
+        "C:\\Users\\hahonggu\\Desktop\\coin_master",
+        "D:\\Projects"
+      ],
+      "function": "is_path_allowed() - 화이트리스트 체크"
+    }
+  },
+  "pending_issue": {
+    "description": "로그인 페이지 접속 안됨 문제",
+    "status": "미확인",
+    "notes": "서버는 정상 실행 중, 브라우저 에러 확인 필요"
+  },
+  "next_steps": [
+    "로그인 문제 디버깅 (브라우저 에러 확인)",
+    "dev 브랜치에서 추가 개발",
+    "RAG 인덱싱 테스트"
+  ]
+}

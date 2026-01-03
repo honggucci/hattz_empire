@@ -2,7 +2,8 @@
 Hattz Empire - Flask Web Interface
 다른 LLM처럼 채팅 인터페이스
 """
-from flask import Flask, render_template, request, jsonify, Response, session
+from flask import Flask, render_template, request, jsonify, Response, session, redirect, url_for
+from flask_login import login_user, logout_user, login_required, current_user
 import json
 import time
 import os
@@ -23,6 +24,15 @@ from stream import get_stream, get_tracker
 import database as db
 import executor
 import rag
+from auth import init_login, get_user, verify_password, User
+
+# Agent Chain (듀얼 엔진 에이전트 체인)
+try:
+    from agent_chain import get_chain, ChainResult, TaskType
+    AGENT_CHAIN_AVAILABLE = True
+except ImportError as e:
+    print(f"[WARNING] Agent chain not available: {e}")
+    AGENT_CHAIN_AVAILABLE = False
 
 # =============================================================================
 # LLM API Clients
@@ -208,11 +218,50 @@ def call_dual_engine(role: str, messages: list, system_prompt: str) -> str:
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "hattz-empire-secret-key-2024")
 
+# Flask-Login 초기화
+init_login(app)
+
 # 현재 세션 ID (기본값 None, 첫 메시지에서 생성)
 current_session_id = None
 
 
+# =============================================================================
+# Authentication Routes
+# =============================================================================
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    """로그인 페이지"""
+    if current_user.is_authenticated:
+        return redirect(url_for('index'))
+
+    error = None
+    if request.method == 'POST':
+        username = request.form.get('username', '')
+        password = request.form.get('password', '')
+        remember = request.form.get('remember', False)
+
+        if verify_password(username, password):
+            user = get_user(username)
+            login_user(user, remember=bool(remember))
+            next_page = request.args.get('next')
+            return redirect(next_page or url_for('index'))
+        else:
+            error = "잘못된 사용자명 또는 비밀번호입니다."
+
+    return render_template('login.html', error=error)
+
+
+@app.route('/logout')
+@login_required
+def logout():
+    """로그아웃"""
+    logout_user()
+    return redirect(url_for('login'))
+
+
 @app.route('/')
+@login_required
 def index():
     """메인 채팅 페이지"""
     return render_template('chat.html',
@@ -222,13 +271,25 @@ def index():
 
 
 @app.route('/api/chat', methods=['POST'])
+@login_required
 def chat():
-    """채팅 API (non-streaming)"""
+    """
+    채팅 API (non-streaming)
+
+    Request JSON:
+    {
+        "message": "사용자 메시지",
+        "agent": "pm",           # 단일 에이전트 모드
+        "mock": false,
+        "use_chain": false       # true면 에이전트 체인 사용 (Excavator→Coder→QA)
+    }
+    """
     global current_session_id
     data = request.json
     user_message = data.get('message', '')
     agent_role = data.get('agent', 'pm')
-    use_mock = data.get('mock', False)  # mock 모드 옵션
+    use_mock = data.get('mock', False)
+    use_chain = data.get('use_chain', False)  # 체인 모드 옵션
 
     if not user_message:
         return jsonify({'error': 'Message required'}), 400
@@ -240,8 +301,30 @@ def chat():
     # DB에 사용자 메시지 저장
     db.add_message(current_session_id, 'user', user_message, agent_role)
 
-    # 실제 LLM 호출 또는 Mock
-    if use_mock:
+    # 에이전트 체인 모드
+    if use_chain and AGENT_CHAIN_AVAILABLE:
+        try:
+            chain = get_chain()
+            result = chain.process(user_message)
+            response = result.final_response
+            agents_used = result.agents_called
+
+            # DB에 어시스턴트 응답 저장
+            db.add_message(current_session_id, 'assistant', response, 'chain')
+
+            return jsonify({
+                'response': response,
+                'agent': 'chain',
+                'agents_called': agents_used,
+                'task_type': result.task_type.value,
+                'timestamp': datetime.now().isoformat(),
+                'session_id': current_session_id
+            })
+        except Exception as e:
+            print(f"[Chain Error] {e}")
+            # 체인 실패시 단일 에이전트로 폴백
+            response = _call_agent(user_message, agent_role)
+    elif use_mock:
         response = _mock_agent_response(user_message, agent_role)
     else:
         response = _call_agent(user_message, agent_role)
@@ -763,6 +846,101 @@ def translate():
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+# =============================================================================
+# Agent Chain API
+# =============================================================================
+
+@app.route('/api/chain', methods=['POST'])
+def agent_chain():
+    """
+    에이전트 체인 API (Excavator → Coder → QA 자동 실행)
+
+    Request JSON:
+    {
+        "message": "CEO 입력",
+        "task_id": "optional task id"
+    }
+    """
+    global current_session_id
+
+    if not AGENT_CHAIN_AVAILABLE:
+        return jsonify({'error': 'Agent chain not available'}), 500
+
+    data = request.json
+    user_message = data.get('message', '')
+    task_id = data.get('task_id')
+
+    if not user_message:
+        return jsonify({'error': 'message is required'}), 400
+
+    # 세션 생성
+    if not current_session_id:
+        current_session_id = db.create_session(agent='chain')
+
+    # DB에 사용자 메시지 저장
+    db.add_message(current_session_id, 'user', user_message, 'chain')
+
+    try:
+        chain = get_chain()
+        result = chain.process(user_message, task_id=task_id)
+
+        # 응답 구성
+        response_data = {
+            'success': result.success,
+            'task_type': result.task_type.value,
+            'agents_called': result.agents_called,
+            'response': result.final_response,
+            'session_id': current_session_id
+        }
+
+        # 추가 정보
+        if result.excavation:
+            response_data['excavation'] = {
+                'explicit': result.excavation.explicit,
+                'implicit': result.excavation.implicit,
+                'confidence': result.excavation.confidence,
+                'perfectionism': result.excavation.perfectionism_detected
+            }
+
+        if result.code:
+            response_data['code'] = {
+                'code': result.code.code[:2000] if result.code.code else '',
+                'complexity': result.code.complexity,
+                'dependencies': result.code.dependencies
+            }
+
+        if result.qa_result:
+            response_data['qa'] = {
+                'status': result.qa_result.status,
+                'issues_count': len(result.qa_result.issues),
+                'confidence': result.qa_result.confidence
+            }
+
+        if result.error:
+            response_data['error'] = result.error
+
+        # DB에 응답 저장
+        db.add_message(current_session_id, 'assistant', result.final_response, 'chain')
+
+        return jsonify(response_data)
+
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'session_id': current_session_id
+        }), 500
+
+
+@app.route('/api/chain/status')
+def chain_status():
+    """에이전트 체인 상태 확인"""
+    return jsonify({
+        'available': AGENT_CHAIN_AVAILABLE,
+        'agents': ['excavator', 'coder', 'qa', 'strategist', 'analyst'] if AGENT_CHAIN_AVAILABLE else []
+    })
 
 
 @app.route('/api/projects/<project_id>/files')
