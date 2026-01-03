@@ -10,8 +10,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from dotenv import load_dotenv
 
-# .env 파일 경로를 명시적으로 지정
-env_path = Path(__file__).parent / '.env'
+# .env 파일 경로를 명시적으로 지정 (프로젝트 루트)
+env_path = Path(__file__).parent.parent.parent / '.env'
 load_dotenv(env_path, override=True)
 
 
@@ -148,8 +148,8 @@ def delete_session(session_id: str) -> bool:
 # Message CRUD
 # =============================================================================
 
-def add_message(session_id: str, role: str, content: str, agent: Optional[str] = None) -> int:
-    """메시지 추가, message_id 반환"""
+def add_message(session_id: str, role: str, content: str, agent: Optional[str] = None, project: Optional[str] = None) -> int:
+    """메시지 추가, message_id 반환 + 임베딩 큐에 자동 추가"""
     with get_db_connection() as conn:
         cursor = conn.cursor()
 
@@ -168,11 +168,14 @@ def add_message(session_id: str, role: str, content: str, agent: Optional[str] =
             WHERE id = ?
         """, (session_id,))
 
-        # 첫 메시지면 세션 이름 자동 설정
+        # 세션의 프로젝트 정보 가져오기 (임베딩용)
         cursor.execute("""
-            SELECT name FROM chat_sessions WHERE id = ?
+            SELECT name, project FROM chat_sessions WHERE id = ?
         """, (session_id,))
         row = cursor.fetchone()
+        session_project = row.project if row else None
+
+        # 첫 메시지면 세션 이름 자동 설정
         if row and row.name is None and role == "user":
             # 첫 30자를 세션 이름으로
             auto_name = content[:30] + ("..." if len(content) > 30 else "")
@@ -181,6 +184,26 @@ def add_message(session_id: str, role: str, content: str, agent: Optional[str] =
             """, (auto_name, session_id))
 
         conn.commit()
+
+        # 임베딩 큐에 비동기 추가 (10자 이상일 때만)
+        if content and len(content) >= 10:
+            try:
+                from src.services.embedding_queue import get_embedding_queue
+                eq = get_embedding_queue()
+                if eq.is_running():
+                    eq.enqueue_message(
+                        message_id=message_id,
+                        content=content,
+                        session_id=session_id,
+                        role=role,
+                        agent=agent or "unknown",
+                        project=project or session_project or "hattz_empire",
+                    )
+            except Exception as e:
+                # 임베딩 실패해도 메시지 저장은 성공
+                import logging
+                logging.getLogger(__name__).warning(f"Failed to enqueue embedding: {e}")
+
         return message_id
 
 

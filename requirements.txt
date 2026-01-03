@@ -2,6 +2,8 @@
 
 # Web Framework
 flask>=3.0.0
+flask-login>=0.6.0
+gunicorn>=21.0.0
 
 # Environment Variables
 python-dotenv>=1.0.0

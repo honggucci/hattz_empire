@@ -51,10 +51,38 @@
                     <span class="header-sep">|</span>
                     <span id="current-agent">PM</span>
                 </div>
-                <span class="status">
-                    <span class="status-dot"></span>
-                    <span id="status-text">Ready</span>
-                </span>
+                <div class="header-right">
+                    <span class="status">
+                        <span class="status-dot"></span>
+                        <span id="status-text">Ready</span>
+                    </span>
+                    <div class="admin-dropdown">
+                        <button class="admin-dropdown-btn" id="admin-dropdown-btn">
+                            <span>관리자</span>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                                <path d="M6 9l6 6 6-6"/>
+                            </svg>
+                        </button>
+                        <div class="admin-dropdown-menu" id="admin-dropdown-menu">
+                            <a href="/costs" class="admin-menu-item">
+                                <span class="menu-icon">💰</span>
+                                <span>비용 관리</span>
+                            </a>
+                            <a href="/monitor" class="admin-menu-item">
+                                <span class="menu-icon">📊</span>
+                                <span>에이전트 모니터</span>
+                            </a>
+                            <a href="/admin" class="admin-menu-item">
+                                <span class="menu-icon">⚙️</span>
+                                <span>설정</span>
+                            </a>
+                            <a href="/api/health/status" class="admin-menu-item" target="_blank">
+                                <span class="menu-icon">🔍</span>
+                                <span>시스템 상태</span>
+                            </a>
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <!-- AI Processing Bar (개선 버전) -->
@@ -72,6 +100,12 @@
                     </span>
                     <span class="processing-stage" id="processing-stage">ANALYZING REQUEST</span>
                 </div>
+                <button id="abort-btn" class="abort-button" title="응답 중단">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="6" y="6" width="12" height="12" rx="2"/>
+                    </svg>
+                    <span>중단</span>
+                </button>
             </div>
 
             <div class="chat-messages" id="chat-messages">
@@ -106,6 +140,22 @@
                 </div>
             </div>
         </main>
+
+        <!-- Background Tasks Status Widget -->
+        <div id="bg-tasks-widget" class="bg-tasks-widget hidden">
+            <div class="widget-header">
+                <span class="widget-title">
+                    <span class="widget-icon">⚡</span>
+                    작업 진행 중
+                </span>
+                <button class="widget-toggle" id="widget-toggle">−</button>
+            </div>
+            <div class="widget-body" id="widget-body">
+                <div class="widget-tasks" id="widget-tasks">
+                    <!-- 작업 목록이 여기에 동적으로 추가됨 -->
+                </div>
+            </div>
+        </div>
     </div>
 
     <script src="{{ url_for('static', filename='js/chat.js') }}"></script>

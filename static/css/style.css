@@ -205,10 +205,9 @@ body {
 /* Session List */
 .session-list {
     flex: 1;
-    min-height: 150px;
-    max-height: calc(100vh - 450px);  /* 뷰포트 높이에서 다른 요소들 빼기 */
+    min-height: 200px;
     overflow-y: auto;
-    margin-bottom: 12px;
+    margin-bottom: 0;
     border: 1px solid var(--border-color);
     border-radius: 6px;
     padding: 8px;
@@ -301,7 +300,8 @@ body {
 
 /* Sidebar bottom section - fixed at bottom */
 .sidebar-bottom {
-    margin-top: auto;
+    margin-top: 12px;
+    flex-shrink: 0;
 }
 
 .sidebar-actions-bottom {
@@ -399,6 +399,90 @@ body {
 @keyframes pulse {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.3; }
+}
+
+/* Header Right Section */
+.header-right {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
+
+/* Admin Dropdown */
+.admin-dropdown {
+    position: relative;
+}
+
+.admin-dropdown-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 14px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.admin-dropdown-btn:hover {
+    background: var(--bg-secondary);
+    border-color: var(--accent-blue);
+    color: var(--accent-blue);
+}
+
+.admin-dropdown-btn svg {
+    transition: transform 0.2s;
+}
+
+.admin-dropdown.open .admin-dropdown-btn svg {
+    transform: rotate(180deg);
+}
+
+.admin-dropdown-menu {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    min-width: 180px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(-10px);
+    transition: all 0.2s;
+    z-index: 1000;
+    overflow: hidden;
+}
+
+.admin-dropdown.open .admin-dropdown-menu {
+    opacity: 1;
+    visibility: visible;
+    transform: translateY(0);
+}
+
+.admin-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 16px;
+    color: var(--text-secondary);
+    text-decoration: none;
+    font-size: 13px;
+    transition: all 0.15s;
+}
+
+.admin-menu-item:hover {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+
+.admin-menu-item .menu-icon {
+    font-size: 14px;
 }
 
 /* Processing Bar - AI 작업 중 표시 (개선 버전) */
@@ -540,6 +624,37 @@ body {
 
 .processing-bar[data-stage="analyzing"] {
     border-color: var(--accent-yellow);
+}
+
+/* Abort Button */
+.abort-button {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 16px;
+    background: rgba(255, 85, 85, 0.15);
+    border: 1px solid rgba(255, 85, 85, 0.4);
+    border-radius: 6px;
+    color: #ff5555;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.abort-button:hover {
+    background: rgba(255, 85, 85, 0.25);
+    border-color: #ff5555;
+    box-shadow: 0 0 12px rgba(255, 85, 85, 0.3);
+}
+
+.abort-button:active {
+    transform: scale(0.95);
+}
+
+.abort-button svg {
+    width: 14px;
+    height: 14px;
 }
 
 /* Chat Messages */
@@ -770,7 +885,165 @@ body {
     50% { opacity: 1; transform: translateY(-4px); }
 }
 
-/* Responsive */
+/* Responsive - Large screens (1200px ~ 1400px) */
+@media (max-width: 1400px) {
+    .sidebar {
+        width: 260px;
+        padding: 16px;
+    }
+
+    .background-tasks-area {
+        width: 280px;
+        right: 15px;
+    }
+}
+
+/* Responsive - Medium screens (992px ~ 1200px) */
+@media (max-width: 1200px) {
+    .sidebar {
+        width: 240px;
+        padding: 14px;
+    }
+
+    .session-list {
+        max-height: calc(100vh - 400px);
+    }
+
+    .chat-header {
+        padding: 14px 20px;
+    }
+
+    .chat-messages {
+        padding: 20px;
+    }
+
+    .chat-input-area {
+        padding: 14px 20px;
+    }
+
+    .message {
+        max-width: 90%;
+    }
+
+    .background-tasks-area {
+        width: 260px;
+        right: 10px;
+        top: 70px;
+    }
+
+    .welcome-message {
+        padding: 40px 16px;
+    }
+
+    .quick-actions {
+        gap: 10px;
+    }
+
+    .quick-btn {
+        padding: 10px 16px;
+        font-size: 13px;
+    }
+}
+
+/* Responsive - Small-medium screens (768px ~ 992px) */
+@media (max-width: 992px) {
+    .sidebar {
+        width: 220px;
+        padding: 12px;
+    }
+
+    .project-selector h3,
+    .agent-selector h3 {
+        font-size: 11px;
+    }
+
+    .project-selector select,
+    .agent-selector select {
+        padding: 8px 10px;
+        font-size: 13px;
+    }
+
+    .session-list {
+        max-height: calc(100vh - 380px);
+        padding: 6px;
+    }
+
+    .session-list h3 {
+        font-size: 10px;
+    }
+
+    .session-item {
+        padding: 8px 10px;
+    }
+
+    .session-item .session-name {
+        font-size: 12px;
+    }
+
+    .btn-primary {
+        padding: 8px 10px;
+        font-size: 12px;
+    }
+
+    .btn-secondary {
+        padding: 6px 10px;
+        font-size: 11px;
+    }
+
+    .model-status {
+        padding: 8px 10px;
+        font-size: 11px;
+    }
+
+    .chat-header {
+        padding: 12px 16px;
+    }
+
+    .chat-header #current-agent {
+        font-size: 14px;
+    }
+
+    .chat-messages {
+        padding: 16px;
+    }
+
+    .chat-input-area {
+        padding: 12px 16px;
+    }
+
+    #message-input {
+        padding: 10px 14px;
+        font-size: 14px;
+    }
+
+    .send-button {
+        width: 40px;
+        height: 40px;
+    }
+
+    .background-tasks-area {
+        width: 240px;
+        max-height: 300px;
+    }
+
+    .background-task-item {
+        padding: 10px 12px;
+    }
+
+    .task-message {
+        font-size: 12px;
+    }
+
+    .welcome-message h2 {
+        font-size: 22px;
+    }
+
+    .welcome-message p {
+        font-size: 14px;
+    }
+}
+
+/* Responsive - Small screens (under 768px) */
 @media (max-width: 768px) {
     .container {
         flex-direction: column;
@@ -844,6 +1117,28 @@ body {
 
     .input-hint {
         display: none;
+    }
+
+    .background-tasks-area {
+        width: calc(100% - 32px);
+        right: 16px;
+        left: 16px;
+        top: auto;
+        bottom: 80px;
+        max-height: 200px;
+    }
+
+    .processing-bar {
+        padding: 12px 16px;
+        gap: 12px;
+    }
+
+    .processing-icon {
+        font-size: 20px;
+    }
+
+    .processing-text {
+        font-size: 13px;
     }
 }
 
@@ -1175,4 +1470,494 @@ body {
 .task-cancel:hover {
     opacity: 1;
     color: var(--accent-red);
+}
+
+/* =============================================================================
+   Background Tasks Status Widget - 플로팅 진행 상태 위젯
+   ============================================================================= */
+
+.bg-tasks-widget {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    width: 320px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    z-index: 1000;
+    overflow: hidden;
+    transition: all 0.3s ease;
+}
+
+.bg-tasks-widget.hidden {
+    display: none;
+}
+
+.bg-tasks-widget.minimized .widget-body {
+    display: none;
+}
+
+.widget-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 16px;
+    background: linear-gradient(135deg, var(--accent-purple) 0%, var(--accent-blue) 100%);
+    cursor: pointer;
+}
+
+.widget-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    color: white;
+}
+
+.widget-icon {
+    font-size: 16px;
+    animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.7; transform: scale(1.1); }
+}
+
+.widget-toggle {
+    background: rgba(255, 255, 255, 0.2);
+    border: none;
+    color: white;
+    width: 24px;
+    height: 24px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 1;
+    transition: background 0.2s;
+}
+
+.widget-toggle:hover {
+    background: rgba(255, 255, 255, 0.3);
+}
+
+.widget-body {
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.widget-tasks {
+    padding: 8px;
+}
+
+/* 개별 작업 아이템 */
+.widget-task-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px;
+    background: var(--bg-tertiary);
+    border-radius: 8px;
+    margin-bottom: 8px;
+    border-left: 3px solid var(--accent-blue);
+    transition: all 0.3s ease;
+}
+
+.widget-task-item:last-child {
+    margin-bottom: 0;
+}
+
+.widget-task-item.thinking {
+    border-left-color: var(--accent-yellow);
+}
+
+.widget-task-item.executing {
+    border-left-color: var(--accent-purple);
+}
+
+.widget-task-item.responding {
+    border-left-color: var(--accent-green);
+}
+
+.widget-task-item.completed {
+    border-left-color: var(--accent-green);
+    opacity: 0.7;
+}
+
+.widget-task-item.failed {
+    border-left-color: var(--accent-red);
+}
+
+/* 하위 에이전트 상태 */
+.widget-task-item.delegating {
+    border-left-color: #f59e0b;
+    background: linear-gradient(90deg, rgba(245, 158, 11, 0.1), var(--bg-tertiary));
+}
+
+.widget-task-item.sub-done {
+    border-left-color: var(--accent-green);
+    background: linear-gradient(90deg, rgba(63, 185, 80, 0.1), var(--bg-tertiary));
+}
+
+/* 작업 아이콘 (애니메이션) */
+.widget-task-icon {
+    font-size: 24px;
+    min-width: 32px;
+    text-align: center;
+}
+
+.widget-task-icon.spinning {
+    animation: spin 1.5s linear infinite;
+}
+
+/* 작업 정보 */
+.widget-task-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.widget-task-title {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-bottom: 4px;
+}
+
+.widget-task-stage {
+    font-size: 11px;
+    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.widget-task-stage-text {
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+/* 프로그래스 바 */
+.widget-progress {
+    margin-top: 8px;
+    height: 4px;
+    background: var(--bg-primary);
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.widget-progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent-blue), var(--accent-purple));
+    border-radius: 2px;
+    transition: width 0.3s ease;
+    position: relative;
+}
+
+.widget-progress-fill::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: linear-gradient(90deg,
+        transparent 0%,
+        rgba(255,255,255,0.3) 50%,
+        transparent 100%);
+    animation: shimmer 1.5s infinite;
+}
+
+@keyframes shimmer {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(100%); }
+}
+
+/* 작업 시간 표시 */
+.widget-task-time {
+    font-size: 10px;
+    color: var(--text-tertiary);
+    margin-top: 4px;
+}
+
+/* 취소 버튼 */
+.widget-task-cancel {
+    background: none;
+    border: none;
+    color: var(--text-tertiary);
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 4px;
+    transition: all 0.2s;
+}
+
+.widget-task-cancel:hover {
+    background: rgba(248, 81, 73, 0.2);
+    color: var(--accent-red);
+}
+
+/* 빈 상태 */
+.widget-empty {
+    padding: 24px;
+    text-align: center;
+    color: var(--text-secondary);
+    font-size: 13px;
+}
+
+/* 반응형 */
+@media (max-width: 768px) {
+    .bg-tasks-widget {
+        width: calc(100% - 32px);
+        right: 16px;
+        bottom: 80px;
+    }
+}
+
+
+/* =============================================================================
+   Model Badge - 응답에 사용된 모델 정보 표시
+============================================================================= */
+
+.model-badge-container {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border-color);
+}
+
+.model-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    background: var(--bg-tertiary);
+    border-radius: 6px;
+    font-size: 11px;
+    color: var(--text-secondary);
+    border: 1px solid var(--border-color);
+    cursor: help;
+    transition: all 0.2s;
+}
+
+.model-badge:hover {
+    border-color: var(--accent-blue);
+    background: rgba(88, 166, 255, 0.1);
+}
+
+.model-icon {
+    font-size: 12px;
+}
+
+.model-name {
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.model-tier {
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+/* 티어별 색상 */
+.tier-budget .model-tier {
+    background: rgba(74, 222, 128, 0.15);
+    color: #4ade80;
+}
+
+.tier-standard .model-tier {
+    background: rgba(96, 165, 250, 0.15);
+    color: #60a5fa;
+}
+
+.tier-vip .model-tier {
+    background: rgba(245, 158, 11, 0.15);
+    color: #f59e0b;
+}
+
+.tier-research .model-tier {
+    background: rgba(167, 139, 250, 0.15);
+    color: #a78bfa;
+}
+
+.tier-mock .model-tier {
+    background: rgba(156, 163, 175, 0.15);
+    color: #9ca3af;
+}
+
+/* CEO 프리픽스 뱃지 */
+.ceo-prefix-badge {
+    padding: 2px 6px;
+    background: rgba(245, 158, 11, 0.2);
+    color: #f59e0b;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 600;
+}
+
+.model-latency {
+    color: var(--text-muted);
+    font-size: 10px;
+}
+
+/* 다시시도 버튼 옆에 배치 */
+.message.assistant .feedback-buttons {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.model-badge-container + .feedback-buttons {
+    margin-top: 8px;
+}
+
+/* =============================================================================
+   프로젝트 선택 강제 모달
+   ============================================================================= */
+
+.modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.7);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10000;
+    animation: fadeIn 0.2s ease;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+.modal-content {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    padding: 32px;
+    max-width: 420px;
+    width: 90%;
+    text-align: center;
+    animation: slideUp 0.3s ease;
+}
+
+@keyframes slideUp {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.project-required-modal .modal-icon {
+    font-size: 48px;
+    margin-bottom: 16px;
+}
+
+.project-required-modal h3 {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 12px;
+}
+
+.project-required-modal p {
+    font-size: 14px;
+    color: var(--text-secondary);
+    margin-bottom: 8px;
+    line-height: 1.5;
+}
+
+.project-required-modal .modal-hint {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-bottom: 24px;
+}
+
+.modal-actions {
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+}
+
+.modal-actions .btn-primary {
+    padding: 10px 20px;
+    background: var(--accent-blue);
+    border: none;
+    border-radius: 6px;
+    color: white;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.modal-actions .btn-primary:hover {
+    background: #4a90e2;
+}
+
+.modal-actions .btn-secondary {
+    padding: 10px 20px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    color: var(--text-secondary);
+    font-size: 14px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.modal-actions .btn-secondary:hover {
+    border-color: var(--text-muted);
+    color: var(--text-primary);
+}
+
+/* =============================================================================
+   프로젝트 상태 인디케이터
+   ============================================================================= */
+
+.project-status-indicator {
+    padding: 8px 16px;
+    margin-bottom: 8px;
+    border-radius: 6px;
+    font-size: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.project-status-indicator .project-badge {
+    color: var(--accent-green);
+    background: rgba(63, 185, 80, 0.1);
+    padding: 4px 12px;
+    border-radius: 4px;
+    border: 1px solid rgba(63, 185, 80, 0.3);
+}
+
+.project-status-indicator.no-project .project-warning {
+    color: var(--accent-yellow);
+    background: rgba(210, 153, 34, 0.1);
+    padding: 4px 12px;
+    border-radius: 4px;
+    border: 1px solid rgba(210, 153, 34, 0.3);
+    animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
 }

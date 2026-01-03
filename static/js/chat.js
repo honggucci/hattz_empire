@@ -21,6 +21,11 @@ let projectFiles = [];
 let currentSessionId = localStorage.getItem('hattz_session_id') || null;
 let sessions = [];
 
+// AbortController for canceling requests
+let currentAbortController = null;
+let currentStreamId = null;  // 서버측 중단용
+const abortBtn = document.getElementById('abort-btn');
+
 // Load projects from API
 async function loadProjects() {
     try {
@@ -64,15 +69,27 @@ async function sendMessage() {
     let message = messageInput.value.trim();
     if (!message) return;
 
+    // ========================================
+    // 프로젝트 선택 강제 체크
+    // ========================================
+    if (!currentProject) {
+        showProjectRequiredModal();
+        return;  // 메시지 전송 차단
+    }
+
     const agent = currentAgent;
 
-    // 코드 리뷰 요청 시 프로젝트 컨텍스트 추가
+    // 프로젝트 컨텍스트를 모든 메시지에 추가
+    const projectContext = `[PROJECT: ${currentProject}]`;
+    if (!message.startsWith('[PROJECT:')) {
+        message = `${projectContext}\n${message}`;
+    }
+
+    // 코드 리뷰 요청 시 파일 목록도 추가
     if (message.includes('코드 리뷰') || message.includes('코드리뷰') || message.includes('code review')) {
-        if (currentProject && projectFiles.length > 0) {
+        if (projectFiles.length > 0) {
             const fileList = projectFiles.slice(0, 20).map(f => f.relative).join('\n- ');
-            message = `[프로젝트: ${currentProject}]\n[파일 목록 (${projectFiles.length}개 중 상위 20개)]:\n- ${fileList}\n\n${message}`;
-        } else if (!currentProject) {
-            message = `⚠️ 프로젝트가 선택되지 않았습니다. 사이드바에서 프로젝트를 먼저 선택해주세요.\n\n${message}`;
+            message = `${projectContext}\n[파일 목록 (${projectFiles.length}개 중 상위 20개)]:\n- ${fileList}\n\n${message}`;
         }
     }
 
@@ -91,12 +108,19 @@ async function sendMessage() {
     // Set status to loading
     setStatus('Thinking...', true);
 
+    // 위젯에 작업 표시
+    const widgetTaskId = showStreamingInWidget(messageInput.value.trim() || message);
+
+    // Create AbortController for this request
+    currentAbortController = new AbortController();
+
     try {
         // Use streaming endpoint - 세션 ID 함께 전송
         const response = await fetch('/api/chat/stream', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ message, agent, session_id: currentSessionId })
+            body: JSON.stringify({ message, agent, session_id: currentSessionId }),
+            signal: currentAbortController.signal
         });
 
         // Remove loading indicator
@@ -109,6 +133,9 @@ async function sendMessage() {
         let assistantMessage = null;
         let fullContent = '';
         let isComplete = false;  // done: true 받았는지 추적
+        let modelInfo = null;  // 모델 정보 저장
+        let finalResponseMessage = null;  // 최종 PM 응답 메시지 (하위 에이전트 호출 후)
+        let finalResponseContent = '';  // 최종 응답 내용
 
         while (true) {
             const { done, value } = await reader.read();
@@ -129,12 +156,81 @@ async function sendMessage() {
                             console.log('[Session] New session created:', data.session_id);
                         }
 
+                        // 스트림 ID 저장 (서버측 중단용)
+                        if (data.stream_id) {
+                            currentStreamId = data.stream_id;
+                            console.log('[Stream] ID:', data.stream_id);
+                        }
+
+                        // 서버측에서 중단됨
+                        if (data.aborted) {
+                            console.log('[Stream] Aborted by server');
+                            if (data.partial && assistantMessage) {
+                                updateMessageContent(assistantMessage, data.partial + '\n\n[응답 중단됨]');
+                            } else if (!assistantMessage) {
+                                appendMessage('assistant', '[응답이 중단되었습니다]', agent);
+                            }
+                            isComplete = true;
+                            break;
+                        }
+
+                        // 모델 정보 수신
+                        if (data.model_info) {
+                            modelInfo = data.model_info;
+                            console.log('[Model]', modelInfo.model_name, `(${modelInfo.tier})`);
+                        }
+
                         // 작업 단계 업데이트
                         if (data.stage) {
-                            updateProcessingStage(data.stage);
+                            // 하위 에이전트 정보 포함 업데이트
+                            let stageText = data.stage;
+                            let widgetMessage = message;
+
+                            // 하위 에이전트 호출 시 추가 정보 표시
+                            if (data.stage === 'calling' && data.sub_agent) {
+                                stageText = `calling_${data.sub_agent}`;
+                                widgetMessage = `${data.sub_agent.toUpperCase()} 호출 중 (${data.progress || ''})`;
+                            } else if (data.stage === 'sub_agent_done' && data.sub_agent) {
+                                widgetMessage = `${data.sub_agent.toUpperCase()} 완료 (${data.progress || ''})`;
+                            } else if (data.stage === 'delegating' && data.agents) {
+                                widgetMessage = `위임: ${data.agents.join(', ')}`;
+                            }
+
+                            updateProcessingStage(data.stage, data.sub_agent);
+
+                            // 위젯도 업데이트
+                            const progressMap = {
+                                'thinking': 15,
+                                'responding': 30,
+                                'delegating': 35,
+                                'calling': 50,
+                                'sub_agent_done': 70,
+                                'summarizing': 80,
+                                'final_response': 90,
+                                'executing': 60,
+                                'analyzing': 75
+                            };
+                            updateWidgetTask(widgetTaskId, {
+                                message: widgetMessage,
+                                stage: data.stage,
+                                progress: progressMap[data.stage] || 50,
+                                startedAt: new Date().toISOString(),
+                                sub_agent: data.sub_agent,
+                                total_agents: data.total_agents
+                            });
+                        }
+
+                        // PM 응답 완료 (하위 에이전트 호출 전)
+                        if (data.pm_done) {
+                            console.log('[PM] Response done, checking for sub-agent calls...');
+                            // pm_done은 done이 아님 - 위젯 유지
                         }
 
                         if (data.done) {
+                            // 모델 정보가 done과 함께 오면 업데이트
+                            if (data.model_info) {
+                                modelInfo = data.model_info;
+                            }
                             // Streaming complete - 세션 ID 확인
                             if (data.session_id && currentSessionId !== data.session_id) {
                                 currentSessionId = data.session_id;
@@ -144,15 +240,31 @@ async function sendMessage() {
                             break;
                         }
 
-                        if (data.token) {
-                            // 첫 토큰 받으면 응답 단계로 전환
-                            if (!assistantMessage) {
-                                updateProcessingStage('responding');
-                                assistantMessage = appendMessage('assistant', fullContent, agent, true);
-                            }
+                        // 하위 에이전트 완료 시 응답 표시
+                        if (data.stage === 'sub_agent_done' && data.sub_agent) {
+                            console.log(`[Sub-Agent] ${data.sub_agent} completed (${data.response_length} chars)`);
+                        }
 
-                            fullContent += data.token;
-                            updateMessageContent(assistantMessage, fullContent);
+                        if (data.token) {
+                            // is_final 토큰이면 최종 PM 응답 (새 메시지 박스)
+                            if (data.is_final) {
+                                if (!finalResponseMessage) {
+                                    // 최종 응답용 새 메시지 박스 생성
+                                    finalResponseContent = '';
+                                    finalResponseMessage = appendMessage('assistant', '', agent, true);
+                                }
+                                finalResponseContent += data.token;
+                                updateMessageContent(finalResponseMessage, finalResponseContent);
+                            } else {
+                                // 첫 토큰 받으면 응답 단계로 전환
+                                if (!assistantMessage) {
+                                    updateProcessingStage('responding');
+                                    assistantMessage = appendMessage('assistant', fullContent, agent, true);
+                                }
+
+                                fullContent += data.token;
+                                updateMessageContent(assistantMessage, fullContent);
+                            }
                         }
                     } catch (e) {
                         // Skip invalid JSON
@@ -166,15 +278,79 @@ async function sendMessage() {
 
         // done: true 받았을 때만 프로그레스바 숨김
         setStatus('Ready', false);
+        currentAbortController = null;
+
+        // 모델 정보 뱃지 추가 (응답 완료 후)
+        // 최종 응답 메시지가 있으면 거기에, 없으면 첫 응답에 추가
+        const targetMessage = finalResponseMessage || assistantMessage;
+        if (targetMessage && modelInfo) {
+            addModelBadge(targetMessage, modelInfo);
+        }
+
+        // 위젯 완료 표시
+        completeStreamingInWidget(widgetTaskId);
 
         // Reload sessions to update list (name may have changed)
         loadSessions();
 
     } catch (error) {
+        currentAbortController = null;
+
+        // AbortError는 사용자가 중단한 것
+        if (error.name === 'AbortError') {
+            console.log('Request aborted by user');
+            removeLoading(loadingId);
+            removeWidgetTask(widgetTaskId);
+
+            // 중단된 응답에 표시
+            if (fullContent) {
+                updateMessageContent(assistantMessage, fullContent + '\n\n[응답 중단됨]');
+            } else {
+                appendMessage('assistant', '[응답이 중단되었습니다]', agent);
+            }
+
+            setStatus('Aborted', false);
+            return;
+        }
+
         console.error('Error:', error);
         removeLoading(loadingId);
+
+        // 위젯에 실패 표시
+        updateWidgetTask(widgetTaskId, {
+            message: '오류 발생',
+            stage: 'failed',
+            progress: 0
+        });
+        setTimeout(() => removeWidgetTask(widgetTaskId), 3000);
+
         appendMessage('assistant', `Error: ${error.message}`, agent);
         setStatus('Error', false);
+    }
+}
+
+// Abort current request
+async function abortRequest() {
+    console.log('Aborting request...');
+
+    // 1. 서버측 스트림 중단 (먼저!)
+    if (currentStreamId) {
+        try {
+            await fetch('/api/chat/abort', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ stream_id: currentStreamId })
+            });
+            console.log('[Abort] Server stream aborted:', currentStreamId);
+        } catch (e) {
+            console.error('[Abort] Failed to abort server stream:', e);
+        }
+        currentStreamId = null;
+    }
+
+    // 2. 클라이언트측 fetch 중단
+    if (currentAbortController) {
+        currentAbortController.abort();
     }
 }
 
@@ -275,17 +451,21 @@ function removeLoading(id) {
     if (loading) loading.remove();
 }
 
-// 작업 단계 정보
+// 작업 단계 정보 (하위 에이전트 포함)
 const PROCESSING_STAGES = {
     'thinking': { icon: '🤔', text: 'PM이 생각 중', stage: 'ANALYZING REQUEST' },
-    'calling': { icon: '📞', text: '에이전트 호출 중', stage: 'CALLING SUB-AGENTS' },
+    'responding': { icon: '✍️', text: 'PM 응답 중', stage: 'PM RESPONDING' },
+    'delegating': { icon: '🚀', text: '에이전트 위임 중', stage: 'DELEGATING TO AGENTS' },
+    'calling': { icon: '📞', text: '에이전트 호출 중', stage: 'CALLING SUB-AGENT' },
+    'sub_agent_done': { icon: '✅', text: '에이전트 완료', stage: 'SUB-AGENT DONE' },
+    'summarizing': { icon: '📝', text: 'PM이 결과 종합 중', stage: 'PM SUMMARIZING' },
+    'final_response': { icon: '✨', text: 'PM 최종 응답 중', stage: 'FINAL RESPONSE' },
     'executing': { icon: '⚡', text: '명령 실행 중', stage: 'EXECUTING COMMANDS' },
-    'analyzing': { icon: '🔍', text: '결과 분석 중', stage: 'ANALYZING RESULTS' },
-    'responding': { icon: '✍️', text: '응답 작성 중', stage: 'GENERATING RESPONSE' }
+    'analyzing': { icon: '🔍', text: '결과 분석 중', stage: 'ANALYZING RESULTS' }
 };
 
 // Set status with processing stage
-function setStatus(text, loading, stage = 'thinking') {
+function setStatus(text, loading, stage = 'thinking', subAgent = null) {
     const statusText = document.getElementById('status-text');
     const dot = document.querySelector('.status-dot');
     const processingBar = document.getElementById('processing-bar');
@@ -315,12 +495,21 @@ function setStatus(text, loading, stage = 'thinking') {
                 processingIcon.textContent = stageInfo.icon;
             }
             if (processingText) {
-                // 기존 dots 보존하면서 텍스트만 업데이트
+                // 하위 에이전트 정보 포함
+                let displayText = stageInfo.text;
+                if (subAgent && (stage === 'calling' || stage === 'sub_agent_done')) {
+                    displayText = `${subAgent.toUpperCase()} ${stage === 'calling' ? '작업 중' : '완료'}`;
+                }
                 const dotsHtml = '<span class="processing-dots"><span></span><span></span><span></span></span>';
-                processingText.innerHTML = `${stageInfo.text}${dotsHtml}`;
+                processingText.innerHTML = `${displayText}${dotsHtml}`;
             }
             if (processingStage) {
-                processingStage.textContent = stageInfo.stage;
+                // 하위 에이전트 표시
+                let stageDisplay = stageInfo.stage;
+                if (subAgent) {
+                    stageDisplay = `${subAgent.toUpperCase()} → ${stageInfo.stage}`;
+                }
+                processingStage.textContent = stageDisplay;
             }
         } else {
             processingBar.classList.add('hidden');
@@ -329,10 +518,15 @@ function setStatus(text, loading, stage = 'thinking') {
 }
 
 // Update processing stage (can be called during streaming)
-function updateProcessingStage(stage) {
+function updateProcessingStage(stage, subAgent = null) {
     const processingBar = document.getElementById('processing-bar');
     if (processingBar && !processingBar.classList.contains('hidden')) {
-        setStatus('Processing...', true, stage);
+        // 하위 에이전트 정보가 있으면 텍스트에 추가
+        let statusText = 'Processing...';
+        if (subAgent) {
+            statusText = `${subAgent.toUpperCase()} 처리 중...`;
+        }
+        setStatus(statusText, true, stage, subAgent);
     }
 }
 
@@ -435,6 +629,11 @@ projectSelect.addEventListener('change', () => {
 
 clearBtn.addEventListener('click', clearChat);
 exportBtn.addEventListener('click', exportChat);
+
+// Abort button listener
+if (abortBtn) {
+    abortBtn.addEventListener('click', abortRequest);
+}
 
 // Check all APIs and show overall status
 async function checkAllApis() {
@@ -917,7 +1116,7 @@ function updateBackgroundTaskProgress(taskId, task) {
 }
 
 // 작업 완료 결과 표시
-function showBackgroundTaskResult(taskId, task) {
+async function showBackgroundTaskResult(taskId, task) {
     const taskDiv = document.getElementById(`task-${taskId}`);
     if (taskDiv) {
         taskDiv.classList.remove('running');
@@ -935,8 +1134,19 @@ function showBackgroundTaskResult(taskId, task) {
 
     // 채팅에 결과 추가
     if (task.result) {
-        appendMessage('assistant', task.result, currentAgent);
+        // 환영 메시지 제거
+        const welcome = chatMessages.querySelector('.welcome-message');
+        if (welcome) welcome.remove();
+
+        appendMessage('assistant', task.result, task.agent_role || currentAgent);
         loadSessions();  // 세션 목록 갱신
+    }
+
+    // 결과 확인했음을 서버에 알림
+    try {
+        await fetch(`/api/task/${taskId}/shown`, { method: 'POST' });
+    } catch (e) {
+        console.error('[BackgroundTask] Mark shown error:', e);
     }
 
     // 브라우저 알림 (권한 있는 경우)
@@ -990,24 +1200,39 @@ async function checkPendingTasks() {
     if (!currentSessionId) return;
 
     try {
-        const response = await fetch(`/api/tasks?session_id=${currentSessionId}`);
-        const data = await response.json();
+        // 1. 실행 중인 작업 조회
+        const runningResponse = await fetch(`/api/tasks?session_id=${currentSessionId}`);
+        const runningData = await runningResponse.json();
 
-        for (const task of data.tasks || []) {
+        for (const task of runningData.tasks || []) {
             if (task.status === 'running' || task.status === 'pending') {
                 activeBackgroundTasks[task.id] = {
                     message: task.message,
                     status: task.status
                 };
                 showBackgroundTaskNotification(task.id, task.message, task.status);
-            } else if (task.status === 'success' && !task.result_shown) {
-                // 완료되었지만 아직 보지 못한 작업
-                showBackgroundTaskResult(task.id, task);
             }
         }
 
         if (Object.keys(activeBackgroundTasks).length > 0) {
             startTaskPolling();
+        }
+
+        // 2. 완료되었지만 아직 보지 못한 작업 조회 (별도 API)
+        const unshownResponse = await fetch(`/api/tasks/unshown?session_id=${currentSessionId}`);
+        const unshownData = await unshownResponse.json();
+
+        if (unshownData.tasks && unshownData.tasks.length > 0) {
+            console.log(`[BackgroundTask] Found ${unshownData.tasks.length} unshown completed tasks`);
+
+            // 약간의 딜레이 후 순차적으로 표시 (사용자 경험 향상)
+            for (let i = 0; i < unshownData.tasks.length; i++) {
+                const task = unshownData.tasks[i];
+                setTimeout(() => {
+                    showBackgroundTaskResult(task.id, task);
+                    playNotificationSound();
+                }, i * 1000);  // 1초 간격으로 표시
+            }
         }
     } catch (error) {
         console.error('[BackgroundTask] Check pending error:', error);
@@ -1024,3 +1249,350 @@ function requestNotificationPermission() {
 // 초기화 시 호출
 requestNotificationPermission();
 checkPendingTasks();
+
+
+// =============================================================================
+// Background Tasks Widget - 진행 상태 위젯
+// =============================================================================
+
+const bgTasksWidget = document.getElementById('bg-tasks-widget');
+const widgetToggle = document.getElementById('widget-toggle');
+const widgetTasks = document.getElementById('widget-tasks');
+
+// 위젯 토글 (최소화/확장)
+if (widgetToggle) {
+    widgetToggle.addEventListener('click', (e) => {
+        e.stopPropagation();
+        bgTasksWidget.classList.toggle('minimized');
+        widgetToggle.textContent = bgTasksWidget.classList.contains('minimized') ? '+' : '−';
+    });
+}
+
+// 위젯 표시/숨김
+function showTasksWidget() {
+    if (bgTasksWidget) {
+        bgTasksWidget.classList.remove('hidden');
+    }
+}
+
+function hideTasksWidget() {
+    if (bgTasksWidget) {
+        bgTasksWidget.classList.add('hidden');
+    }
+}
+
+// 위젯에 작업 추가/업데이트
+function updateWidgetTask(taskId, taskData) {
+    if (!widgetTasks) return;
+
+    showTasksWidget();
+
+    let taskEl = document.getElementById(`widget-task-${taskId}`);
+
+    if (!taskEl) {
+        taskEl = document.createElement('div');
+        taskEl.id = `widget-task-${taskId}`;
+        taskEl.className = 'widget-task-item';
+        widgetTasks.appendChild(taskEl);
+    }
+
+    const stageInfo = {
+        'waiting': { icon: '⏳', text: '대기 중', class: 'waiting' },
+        'thinking': { icon: '🤔', text: 'PM이 분석 중', class: 'thinking' },
+        'responding': { icon: '✍️', text: 'PM 응답 중', class: 'responding' },
+        'delegating': { icon: '🚀', text: '에이전트 위임 중', class: 'delegating' },
+        'calling': { icon: '📞', text: '에이전트 호출 중', class: 'executing' },
+        'sub_agent_done': { icon: '✅', text: '에이전트 완료', class: 'sub-done' },
+        'summarizing': { icon: '📝', text: 'PM 결과 종합 중', class: 'thinking' },
+        'final_response': { icon: '✨', text: 'PM 최종 응답 중', class: 'responding' },
+        'executing': { icon: '⚡', text: '명령 실행 중', class: 'executing' },
+        'analyzing': { icon: '🔍', text: '결과 분석 중', class: 'thinking' },
+        'finalizing': { icon: '📝', text: '마무리 중', class: 'responding' },
+        'completed': { icon: '✅', text: '완료!', class: 'completed' },
+        'failed': { icon: '❌', text: '실패', class: 'failed' }
+    };
+
+    const stage = taskData.stage || 'thinking';
+    const info = stageInfo[stage] || stageInfo['thinking'];
+    const progress = taskData.progress || 0;
+    const message = taskData.message || '작업 처리 중...';
+    const elapsedTime = taskData.startedAt
+        ? Math.floor((Date.now() - new Date(taskData.startedAt).getTime()) / 1000)
+        : 0;
+
+    // 하위 에이전트 정보 표시
+    let stageDisplayText = info.text;
+    if (taskData.sub_agent) {
+        stageDisplayText = `${taskData.sub_agent.toUpperCase()} ${stage === 'calling' ? '작업 중' : '완료'}`;
+    }
+
+    // 전체 에이전트 진행 상황 표시
+    let agentProgress = '';
+    if (taskData.total_agents && taskData.total_agents > 1) {
+        agentProgress = ` (${taskData.progress_count || 1}/${taskData.total_agents})`;
+    }
+
+    taskEl.className = `widget-task-item ${info.class}`;
+    taskEl.innerHTML = `
+        <div class="widget-task-icon ${stage !== 'completed' && stage !== 'failed' ? 'spinning' : ''}">
+            ${info.icon}
+        </div>
+        <div class="widget-task-info">
+            <div class="widget-task-title">${escapeHtml(message.slice(0, 40))}${message.length > 40 ? '...' : ''}</div>
+            <div class="widget-task-stage">
+                <span class="widget-task-stage-text">${stageDisplayText}${agentProgress}</span>
+            </div>
+            <div class="widget-progress">
+                <div class="widget-progress-fill" style="width: ${progress}%"></div>
+            </div>
+            ${elapsedTime > 0 ? `<div class="widget-task-time">경과: ${formatElapsedTime(elapsedTime)}</div>` : ''}
+        </div>
+        ${stage !== 'completed' && stage !== 'failed' ? `
+            <button class="widget-task-cancel" onclick="cancelWidgetTask('${taskId}')" title="취소">✕</button>
+        ` : ''}
+    `;
+}
+
+// 경과 시간 포맷
+function formatElapsedTime(seconds) {
+    if (seconds < 60) return `${seconds}초`;
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}분 ${secs}초`;
+}
+
+// 위젯에서 작업 제거
+function removeWidgetTask(taskId) {
+    const taskEl = document.getElementById(`widget-task-${taskId}`);
+    if (taskEl) {
+        taskEl.style.opacity = '0';
+        taskEl.style.transform = 'translateX(20px)';
+        setTimeout(() => {
+            taskEl.remove();
+            // 모든 작업이 완료되면 위젯 숨김
+            if (widgetTasks && widgetTasks.children.length === 0) {
+                setTimeout(hideTasksWidget, 1000);
+            }
+        }, 300);
+    }
+}
+
+// 위젯에서 작업 취소
+async function cancelWidgetTask(taskId) {
+    await cancelBackgroundTask(taskId);
+    removeWidgetTask(taskId);
+}
+
+// 일반 채팅에서도 위젯 표시 (스트리밍 중)
+function showStreamingInWidget(message) {
+    const streamTaskId = 'streaming-current';
+    updateWidgetTask(streamTaskId, {
+        message: message,
+        stage: 'thinking',
+        progress: 10,
+        startedAt: new Date().toISOString()
+    });
+    return streamTaskId;
+}
+
+// 스트리밍 단계 업데이트
+function updateStreamingStage(taskId, stage, progress) {
+    updateWidgetTask(taskId, {
+        message: activeBackgroundTasks[taskId]?.message || '처리 중...',
+        stage: stage,
+        progress: progress,
+        startedAt: activeBackgroundTasks[taskId]?.startedAt
+    });
+}
+
+// 스트리밍 완료
+function completeStreamingInWidget(taskId) {
+    updateWidgetTask(taskId, {
+        message: '완료!',
+        stage: 'completed',
+        progress: 100
+    });
+    setTimeout(() => removeWidgetTask(taskId), 2000);
+}
+
+
+// =============================================================================
+// Model Badge - 응답에 사용된 모델 정보 표시
+// =============================================================================
+
+/**
+ * 메시지에 모델 정보 뱃지 추가
+ * @param {HTMLElement} messageDiv - 메시지 DOM 요소
+ * @param {Object} modelInfo - 모델 정보 {model_name, tier, reason, provider, latency_ms}
+ */
+function addModelBadge(messageDiv, modelInfo) {
+    if (!messageDiv || !modelInfo) return;
+
+    // 티어별 색상/아이콘 매핑
+    const tierConfig = {
+        'budget': { icon: '💰', color: '#4ade80', label: 'Budget' },
+        'standard': { icon: '⚡', color: '#60a5fa', label: 'Standard' },
+        'vip': { icon: '👑', color: '#f59e0b', label: 'VIP' },
+        'research': { icon: '🔍', color: '#a78bfa', label: 'Research' },
+        'mock': { icon: '🎭', color: '#9ca3af', label: 'Mock' }
+    };
+
+    const config = tierConfig[modelInfo.tier] || tierConfig['standard'];
+
+    // 피드백 버튼 찾기
+    const feedbackButtons = messageDiv.querySelector('.feedback-buttons');
+
+    // 모델 뱃지 컨테이너 생성
+    const badgeContainer = document.createElement('div');
+    badgeContainer.className = 'model-badge-container';
+
+    // 레이턴시 표시 (있는 경우)
+    const latencyText = modelInfo.latency_ms
+        ? ` · ${(modelInfo.latency_ms / 1000).toFixed(1)}s`
+        : '';
+
+    // CEO 프리픽스 표시 (있는 경우)
+    const prefixBadge = modelInfo.ceo_prefix
+        ? `<span class="ceo-prefix-badge">${modelInfo.ceo_prefix}</span>`
+        : '';
+
+    badgeContainer.innerHTML = `
+        <div class="model-badge tier-${modelInfo.tier}" title="${modelInfo.reason}">
+            <span class="model-icon">${config.icon}</span>
+            <span class="model-name">${modelInfo.model_name}</span>
+            <span class="model-tier">${config.label}</span>
+            ${prefixBadge}
+            <span class="model-latency">${latencyText}</span>
+        </div>
+    `;
+
+    // 피드백 버튼이 있으면 그 앞에, 없으면 메시지 끝에 추가
+    if (feedbackButtons) {
+        messageDiv.insertBefore(badgeContainer, feedbackButtons);
+    } else {
+        messageDiv.appendChild(badgeContainer);
+    }
+}
+
+
+// =============================================================================
+// Admin Dropdown - 관리자 드롭다운 메뉴
+// =============================================================================
+
+const adminDropdown = document.querySelector('.admin-dropdown');
+const adminDropdownBtn = document.getElementById('admin-dropdown-btn');
+
+if (adminDropdownBtn && adminDropdown) {
+    // 버튼 클릭 시 토글
+    adminDropdownBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        adminDropdown.classList.toggle('open');
+    });
+
+    // 외부 클릭 시 닫기
+    document.addEventListener('click', (e) => {
+        if (!adminDropdown.contains(e.target)) {
+            adminDropdown.classList.remove('open');
+        }
+    });
+
+    // ESC 키로 닫기
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            adminDropdown.classList.remove('open');
+        }
+    });
+}
+
+// =============================================================================
+// 프로젝트 선택 강제 모달
+// =============================================================================
+
+function showProjectRequiredModal() {
+    // 이미 모달이 있으면 제거
+    const existingModal = document.getElementById('project-required-modal');
+    if (existingModal) existingModal.remove();
+
+    const modal = document.createElement('div');
+    modal.id = 'project-required-modal';
+    modal.className = 'modal-overlay';
+    modal.innerHTML = `
+        <div class="modal-content project-required-modal">
+            <div class="modal-icon">⚠️</div>
+            <h3>프로젝트를 선택해주세요</h3>
+            <p>메시지를 보내려면 먼저 프로젝트를 선택해야 합니다.</p>
+            <p class="modal-hint">프로젝트를 선택하면 PM이 해당 프로젝트의 파일을 읽고 수정할 수 있습니다.</p>
+            <div class="modal-actions">
+                <button class="btn-primary" id="modal-select-project">프로젝트 선택하기</button>
+                <button class="btn-secondary" id="modal-close">닫기</button>
+            </div>
+        </div>
+    `;
+
+    document.body.appendChild(modal);
+
+    // 프로젝트 선택 버튼 - 드롭다운 포커스
+    document.getElementById('modal-select-project').addEventListener('click', () => {
+        modal.remove();
+        projectSelect.focus();
+        // 드롭다운 열기 (클릭 시뮬레이션)
+        projectSelect.dispatchEvent(new MouseEvent('mousedown'));
+    });
+
+    // 닫기 버튼
+    document.getElementById('modal-close').addEventListener('click', () => {
+        modal.remove();
+    });
+
+    // 오버레이 클릭으로 닫기
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) {
+            modal.remove();
+        }
+    });
+
+    // ESC로 닫기
+    const escHandler = (e) => {
+        if (e.key === 'Escape') {
+            modal.remove();
+            document.removeEventListener('keydown', escHandler);
+        }
+    };
+    document.addEventListener('keydown', escHandler);
+}
+
+// 프로젝트 선택 상태 표시 업데이트
+function updateProjectStatus() {
+    const projectIndicator = document.querySelector('.project-status-indicator');
+    if (!projectIndicator) {
+        // 인디케이터 없으면 생성
+        const indicator = document.createElement('div');
+        indicator.className = 'project-status-indicator';
+        const inputArea = document.querySelector('.chat-input-area');
+        if (inputArea) {
+            inputArea.insertBefore(indicator, inputArea.firstChild);
+        }
+    }
+
+    const indicator = document.querySelector('.project-status-indicator');
+    if (indicator) {
+        if (currentProject) {
+            indicator.innerHTML = `<span class="project-badge">📁 ${currentProject}</span>`;
+            indicator.classList.remove('no-project');
+        } else {
+            indicator.innerHTML = `<span class="project-warning">⚠️ 프로젝트를 선택하세요</span>`;
+            indicator.classList.add('no-project');
+        }
+    }
+}
+
+// 프로젝트 선택 시 상태 업데이트
+projectSelect.addEventListener('change', async (e) => {
+    await loadProjectFiles(e.target.value);
+    updateProjectStatus();
+});
+
+// 초기 로드 시 상태 표시
+document.addEventListener('DOMContentLoaded', () => {
+    setTimeout(updateProjectStatus, 500);  // 프로젝트 로드 후 실행
+});

@@ -480,7 +480,7 @@ def _log_gemini_summarization(
 ):
     """Gemini 요약 호출을 agent_logs DB에 기록"""
     try:
-        from agent_scorecard import get_scorecard
+        from .agent_scorecard import get_scorecard
 
         scorecard = get_scorecard()
         if not scorecard._initialized:

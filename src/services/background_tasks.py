@@ -14,7 +14,7 @@ from typing import Optional, Dict, Any, Callable
 from enum import Enum
 import traceback
 
-import database as db
+from . import database as db
 
 
 class TaskStatus(Enum):
@@ -272,6 +272,7 @@ def create_background_tasks_table() -> bool:
                         error NVARCHAR(MAX) NULL,
                         progress INT DEFAULT 0,
                         stage VARCHAR(50) DEFAULT 'waiting',
+                        result_shown BIT DEFAULT 0,
                         created_at DATETIME DEFAULT GETDATE(),
                         started_at DATETIME NULL,
                         completed_at DATETIME NULL
@@ -282,6 +283,19 @@ def create_background_tasks_table() -> bool:
                 END
             """)
             conn.commit()
+
+            # result_shown 컬럼 추가 (기존 테이블용)
+            cursor.execute("""
+                IF NOT EXISTS (
+                    SELECT * FROM sys.columns
+                    WHERE object_id = OBJECT_ID('background_tasks') AND name = 'result_shown'
+                )
+                BEGIN
+                    ALTER TABLE background_tasks ADD result_shown BIT DEFAULT 0
+                END
+            """)
+            conn.commit()
+
             print("[BackgroundTask] Table created/verified")
             return True
     except Exception as e:
@@ -362,7 +376,8 @@ def _get_task_from_db(task_id: str) -> Optional[Dict[str, Any]]:
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT id, session_id, agent_role, message, status, result, error,
-                       progress, stage, created_at, started_at, completed_at
+                       progress, stage, created_at, started_at, completed_at,
+                       ISNULL(result_shown, 0) as result_shown
                 FROM background_tasks
                 WHERE id = ?
             """, (task_id,))
@@ -379,6 +394,7 @@ def _get_task_from_db(task_id: str) -> Optional[Dict[str, Any]]:
                     "error": row.error,
                     "progress": row.progress,
                     "stage": row.stage,
+                    "result_shown": bool(row.result_shown),
                     "created_at": row.created_at.isoformat() if row.created_at else None,
                     "started_at": row.started_at.isoformat() if row.started_at else None,
                     "completed_at": row.completed_at.isoformat() if row.completed_at else None,
@@ -395,10 +411,66 @@ def _get_tasks_from_db(session_id: str) -> list:
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT id, session_id, agent_role, message, status, result, error,
-                       progress, stage, created_at, started_at, completed_at
+                       progress, stage, created_at, started_at, completed_at,
+                       ISNULL(result_shown, 0) as result_shown
                 FROM background_tasks
                 WHERE session_id = ?
                 ORDER BY created_at DESC
+            """, (session_id,))
+
+            tasks = []
+            for row in cursor.fetchall():
+                tasks.append({
+                    "id": row.id,
+                    "session_id": row.session_id,
+                    "agent_role": row.agent_role,
+                    "message": row.message[:100] + "..." if len(row.message or "") > 100 else row.message,
+                    "status": row.status,
+                    "result": row.result,
+                    "error": row.error,
+                    "progress": row.progress,
+                    "stage": row.stage,
+                    "result_shown": bool(row.result_shown),
+                    "created_at": row.created_at.isoformat() if row.created_at else None,
+                    "started_at": row.started_at.isoformat() if row.started_at else None,
+                    "completed_at": row.completed_at.isoformat() if row.completed_at else None,
+                })
+            return tasks
+    except Exception as e:
+        print(f"[BackgroundTask] DB list error: {e}")
+    return []
+
+
+def mark_result_shown(task_id: str) -> bool:
+    """결과를 확인했음을 표시"""
+    try:
+        with db.get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE background_tasks
+                SET result_shown = 1
+                WHERE id = ?
+            """, (task_id,))
+            conn.commit()
+            return True
+    except Exception as e:
+        print(f"[BackgroundTask] Mark shown error: {e}")
+        return False
+
+
+def get_unshown_completed_tasks(session_id: str) -> list:
+    """완료되었지만 아직 표시되지 않은 작업들 조회"""
+    try:
+        with db.get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id, session_id, agent_role, message, status, result, error,
+                       progress, stage, created_at, started_at, completed_at
+                FROM background_tasks
+                WHERE session_id = ?
+                  AND status = 'success'
+                  AND (result_shown IS NULL OR result_shown = 0)
+                ORDER BY completed_at ASC
             """, (session_id,))
 
             tasks = []
@@ -419,7 +491,7 @@ def _get_tasks_from_db(session_id: str) -> list:
                 })
             return tasks
     except Exception as e:
-        print(f"[BackgroundTask] DB list error: {e}")
+        print(f"[BackgroundTask] Get unshown error: {e}")
     return []
 
 

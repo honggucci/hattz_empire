@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c:*)",
+      "Bash(python hooks/live_backup.py:*)",
+      "Bash(mv:*)",
+      "Bash(git add:*)",
+      "Bash(pip install:*)",
+      "Bash(taskkill:*)",
+      "Bash(python app.py:*)",
+      "Bash(curl:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nfeat: Add Flask-Login authentication system\n\n- Add auth.py with Flask-Login integration\n- Add login.html template \\(dark theme\\)\n- Update app.py with /login, /logout routes\n- Apply @login_required to protected routes\n- Default account: admin/admin\n- Add session backup for login system\n\n🤖 Generated with [Claude Code]\\(https://claude.com/claude-code\\)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git branch:*)",
+      "Bash(git push:*)",
+      "Bash(git commit:*)",
+      "Bash(git checkout:*)"
+    ]
+  }
+}

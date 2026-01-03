@@ -1083,6 +1083,27 @@ review_checklist:
 # Project Registry
 # =============================================================================
 
+# =============================================================================
+# Server Configuration
+# =============================================================================
+
+SERVER_CONFIG = {
+    "local": {
+        "host": "localhost",
+        "port": 5000,
+        "url": "http://localhost:5000",
+    },
+    "ngrok": {
+        "domain": "caitlyn-supercivilized-intrudingly.ngrok-free.app",
+        "url": "https://caitlyn-supercivilized-intrudingly.ngrok-free.app",
+    },
+}
+
+
+# =============================================================================
+# Project Registry
+# =============================================================================
+
 PROJECTS = {
     "wpcn": {
         "name": "WPCN",

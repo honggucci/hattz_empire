@@ -4,7 +4,7 @@ HattzRouter - Traffic Control System for AI Model Routing (v2.0 Budget Optimized
 비용 최적화 3단 변속기:
 - BUDGET: Gemini 2.0 Flash ($0.10/$0.40) - 80% 일반 작업
 - STANDARD: Claude Sonnet 4 ($3/$15) - 15% 코딩/분석
-- VIP: Opus 4.5 / GPT-5 Thinking ($5~$10) - 5% 감사/고난도
+- VIP: Opus 4.5 / GPT-5.2 Thinking Extend ($5~$20) - 5% 감사/고난도
 - RESEARCH: Perplexity Sonar Pro ($3/$15) - 트리거 기반 검색
 
 에스컬레이션 로직:
@@ -128,17 +128,17 @@ class HattzRouter:
             max_tokens=8192,
         )
 
-        # VIP-THINKING: GPT-5 Thinking - 추론/원인분석
+        # VIP-THINKING: GPT-5.2 Thinking Extend - 추론/원인분석
         self.VIP_THINKING_MODEL = ModelSpec(
-            name="GPT-5 Thinking",
+            name="GPT-5.2 Thinking Extend",
             provider="openai",
-            model_id="gpt-4o",  # 실제로는 gpt-5가 없으므로 4o 사용
+            model_id="gpt-5.2-thinking-extend",
             api_key_env="OPENAI_API_KEY",
             tier=ModelTier.VIP,
-            cost_input=2.50,
-            cost_output=10.0,
+            cost_input=5.0,
+            cost_output=20.0,
             temperature=0.2,
-            max_tokens=16384,
+            max_tokens=32768,
             thinking_mode=True,
         )
 
@@ -222,6 +222,7 @@ class HattzRouter:
         메시지 + 역할 기반 라우팅
 
         우선순위:
+        0. CEO 프리픽스 (최고/, 검색/) → VIP/Research 강제
         1. 고위험 키워드 → VIP (Opus)
         2. 추론 키워드 → VIP (Thinking)
         3. 검색 키워드 → Research (Perplexity)
@@ -229,6 +230,11 @@ class HattzRouter:
         5. 에이전트 기본 티어
         """
         message_lower = message.lower()
+
+        # 0. CEO 프리픽스 체크 (최우선)
+        prefix_result = self._check_ceo_prefix(message)
+        if prefix_result:
+            return prefix_result
 
         # 1. 고위험 체크 → VIP-AUDIT 강제
         if self._is_high_risk(message_lower):
@@ -301,6 +307,49 @@ class HattzRouter:
             fallback_spec=self._get_fallback(model),
             escalate_to=escalate_to
         )
+
+    def _check_ceo_prefix(self, message: str) -> Optional[RoutingDecision]:
+        """
+        CEO 프리픽스 체크 - VIP 모델 강제 호출
+
+        프리픽스:
+        - 최고/ : VIP-AUDIT (Opus 4.5) 강제 호출
+        - 생각/ : VIP-THINKING (GPT-5.2 Thinking Extend) 강제 호출
+        - 검색/ : RESEARCH (Perplexity) 강제 호출
+
+        예시:
+        - "최고/ 이 코드 리뷰해줘" → Opus 4.5 사용
+        - "생각/ 왜 이게 안될까?" → GPT-5.2 Thinking Extend 사용
+        - "검색/ 최신 파이썬 버전" → Perplexity 사용
+        """
+        # VIP-AUDIT 강제 (최고/)
+        if message.startswith("최고/") or message.startswith("최고/ "):
+            return self._create_decision(
+                self.VIP_AUDIT_MODEL,
+                "CEO prefix '최고/' → VIP-AUDIT (Opus 4.5) 강제",
+                0,
+                escalate_to=None  # 이미 최고 티어
+            )
+
+        # VIP-THINKING 강제 (생각/)
+        if message.startswith("생각/") or message.startswith("생각/ "):
+            return self._create_decision(
+                self.VIP_THINKING_MODEL,
+                "CEO prefix '생각/' → VIP-THINKING 강제",
+                0,
+                escalate_to=self.VIP_AUDIT_MODEL
+            )
+
+        # RESEARCH 강제 (검색/)
+        if message.startswith("검색/") or message.startswith("검색/ "):
+            return self._create_decision(
+                self.RESEARCH_MODEL,
+                "CEO prefix '검색/' → RESEARCH (Perplexity) 강제",
+                0,
+                escalate_to=self.STANDARD_MODEL
+            )
+
+        return None
 
     def _is_high_risk(self, message: str) -> bool:
         """고위험 키워드 체크"""

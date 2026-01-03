@@ -129,7 +129,7 @@ def _log_gemini_rag_summarization(
 ):
     """Gemini RAG 요약 호출을 agent_logs DB에 기록"""
     try:
-        from agent_scorecard import get_scorecard
+        from .agent_scorecard import get_scorecard
 
         scorecard = get_scorecard()
         if not scorecard._initialized:
@@ -294,6 +294,43 @@ def run_embeddings_migration() -> Dict[str, Any]:
     return results
 
 
+def backfill_embeddings_null_values(default_project: str = "hattz_empire") -> Dict[str, int]:
+    """
+    기존 embeddings 테이블의 NULL 값을 채우기
+
+    Args:
+        default_project: project가 NULL인 레코드에 설정할 기본값
+
+    Returns:
+        업데이트된 레코드 수
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    results = {"project_updated": 0, "source_updated": 0}
+
+    # project가 NULL인 레코드 업데이트
+    cursor.execute("""
+        UPDATE embeddings
+        SET project = ?
+        WHERE project IS NULL
+    """, (default_project,))
+    results["project_updated"] = cursor.rowcount
+
+    # source가 NULL인 레코드 업데이트
+    cursor.execute("""
+        UPDATE embeddings
+        SET source = 'web'
+        WHERE source IS NULL
+    """)
+    results["source_updated"] = cursor.rowcount
+
+    conn.commit()
+    conn.close()
+
+    return results
+
+
 # =============================================================================
 # Embedding Functions
 # =============================================================================
@@ -419,8 +456,14 @@ def index_document(
     return doc_id
 
 
-def index_logs_from_db(limit: int = 1000) -> int:
-    """hattz_logs 테이블에서 로그 인덱싱"""
+def index_logs_from_db(limit: int = 1000, project: str = None) -> int:
+    """
+    hattz_logs 테이블에서 로그 인덱싱
+
+    Args:
+        limit: 최대 인덱싱 개수
+        project: 프로젝트 ID (None이면 'hattz_empire' 기본값)
+    """
     conn = get_connection()
     cursor = conn.cursor()
 
@@ -438,6 +481,9 @@ def index_logs_from_db(limit: int = 1000) -> int:
     logs = cursor.fetchall()
     conn.close()
 
+    # 기본 프로젝트
+    default_project = project or "hattz_empire"
+
     indexed = 0
     for log in logs:
         log_id, from_agent, to_agent, msg_type, preview, full_content, timestamp, task_id = log
@@ -454,7 +500,7 @@ def index_logs_from_db(limit: int = 1000) -> int:
         }
 
         try:
-            index_document("log", log_id, content, metadata)
+            index_document("log", log_id, content, metadata, project=default_project, source="web")
             indexed += 1
         except Exception as e:
             print(f"Failed to index log {log_id}: {e}")
@@ -462,18 +508,25 @@ def index_logs_from_db(limit: int = 1000) -> int:
     return indexed
 
 
-def index_messages_from_db(limit: int = 1000) -> int:
-    """messages 테이블에서 메시지 인덱싱"""
+def index_messages_from_db(limit: int = 1000, project: str = None) -> int:
+    """
+    messages 테이블에서 메시지 인덱싱
+
+    Args:
+        limit: 최대 인덱싱 개수
+        project: 프로젝트 ID (세션에서 추출 시도, 없으면 기본값)
+    """
     conn = get_connection()
     cursor = conn.cursor()
 
-    # 아직 인덱싱 안 된 메시지 조회
+    # 아직 인덱싱 안 된 메시지 조회 (세션의 프로젝트 정보도 함께)
     cursor.execute("""
-        SELECT m.id, m.session_id, m.role, m.content, m.agent, m.created_at
-        FROM messages m
+        SELECT m.id, m.session_id, m.role, m.content, m.agent, m.timestamp, s.project
+        FROM chat_messages m
+        LEFT JOIN chat_sessions s ON m.session_id = s.id
         LEFT JOIN embeddings e ON e.source_id = CAST(m.id AS NVARCHAR(100)) AND e.source_type = 'message'
         WHERE e.id IS NULL AND m.content IS NOT NULL AND LEN(m.content) > 10
-        ORDER BY m.created_at DESC
+        ORDER BY m.timestamp DESC
         OFFSET 0 ROWS FETCH NEXT ? ROWS ONLY
     """, (limit,))
 
@@ -482,7 +535,10 @@ def index_messages_from_db(limit: int = 1000) -> int:
 
     indexed = 0
     for msg in messages:
-        msg_id, session_id, role, content, agent, created_at = msg
+        msg_id, session_id, role, content, agent, created_at, session_project = msg
+
+        # 프로젝트 결정: 파라미터 > 세션 > 기본값
+        msg_project = project or session_project or "hattz_empire"
 
         metadata = {
             "session_id": session_id,
@@ -492,7 +548,7 @@ def index_messages_from_db(limit: int = 1000) -> int:
         }
 
         try:
-            index_document("message", str(msg_id), content, metadata)
+            index_document("message", str(msg_id), content, metadata, project=msg_project, source="web")
             indexed += 1
         except Exception as e:
             print(f"Failed to index message {msg_id}: {e}")

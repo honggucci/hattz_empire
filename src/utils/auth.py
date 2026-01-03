@@ -98,7 +98,7 @@ def add_user(username: str, password: str, role: str = "user") -> bool:
 # =============================================================================
 
 login_manager = LoginManager()
-login_manager.login_view = "login"
+login_manager.login_view = "auth.login"
 login_manager.login_message = "로그인이 필요합니다."
 login_manager.login_message_category = "warning"
 
@@ -123,7 +123,7 @@ def admin_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
         if not current_user.is_authenticated:
-            return redirect(url_for('login', next=request.url))
+            return redirect(url_for('auth.login', next=request.url))
         if not current_user.is_admin():
             return "Access denied: Admin required", 403
         return f(*args, **kwargs)

@@ -1,0 +1,528 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hattz Empire - Cost Dashboard</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        .cost-dashboard {
+            padding: 24px;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .dashboard-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+        }
+
+        .dashboard-header h1 {
+            font-size: 24px;
+            font-weight: 600;
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .back-link {
+            color: var(--text-secondary);
+            text-decoration: none;
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            transition: color 0.2s;
+        }
+
+        .back-link:hover {
+            color: var(--accent-blue);
+        }
+
+        .period-selector {
+            display: flex;
+            gap: 8px;
+        }
+
+        .period-btn {
+            padding: 8px 16px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: all 0.2s;
+            font-size: 13px;
+        }
+
+        .period-btn.active {
+            background: var(--accent-blue);
+            border-color: var(--accent-blue);
+            color: white;
+        }
+
+        .period-btn:hover:not(.active) {
+            border-color: var(--accent-blue);
+            color: var(--accent-blue);
+        }
+
+        /* Summary Cards */
+        .summary-cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .summary-card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 20px;
+        }
+
+        .summary-card .label {
+            font-size: 12px;
+            color: var(--text-tertiary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 8px;
+        }
+
+        .summary-card .value {
+            font-size: 28px;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .summary-card .value.cost {
+            color: var(--accent-green);
+        }
+
+        .summary-card .sub {
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-top: 4px;
+        }
+
+        .summary-card .change {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 12px;
+            padding: 2px 8px;
+            border-radius: 4px;
+            margin-top: 8px;
+        }
+
+        .summary-card .change.up {
+            background: rgba(248, 81, 73, 0.15);
+            color: var(--accent-red);
+        }
+
+        .summary-card .change.down {
+            background: rgba(63, 185, 80, 0.15);
+            color: var(--accent-green);
+        }
+
+        /* Charts Section */
+        .charts-section {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .chart-card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 20px;
+        }
+
+        .chart-card h3 {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        /* Model Stats */
+        .model-list {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .model-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .model-item .info {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .model-item .name {
+            font-size: 13px;
+            color: var(--text-primary);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .model-item .tier {
+            font-size: 10px;
+            padding: 2px 6px;
+            border-radius: 4px;
+            background: var(--bg-tertiary);
+            color: var(--text-secondary);
+            text-transform: uppercase;
+        }
+
+        .model-item .tier.budget { background: rgba(63, 185, 80, 0.15); color: var(--accent-green); }
+        .model-item .tier.standard { background: rgba(88, 166, 255, 0.15); color: var(--accent-blue); }
+        .model-item .tier.premium { background: rgba(163, 113, 247, 0.15); color: var(--accent-purple); }
+        .model-item .tier.thinking { background: rgba(210, 153, 34, 0.15); color: var(--accent-yellow); }
+
+        .model-item .bar-container {
+            flex: 1;
+            height: 8px;
+            background: var(--bg-tertiary);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .model-item .bar {
+            height: 100%;
+            background: linear-gradient(90deg, var(--accent-blue), var(--accent-purple));
+            border-radius: 4px;
+            transition: width 0.5s ease;
+        }
+
+        .model-item .stats {
+            text-align: right;
+            min-width: 80px;
+        }
+
+        .model-item .calls {
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text-primary);
+        }
+
+        .model-item .percentage {
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+
+        /* Concentration Warning */
+        .concentration-alert {
+            background: rgba(248, 81, 73, 0.1);
+            border: 1px solid var(--accent-red);
+            border-radius: 8px;
+            padding: 12px 16px;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 13px;
+            color: var(--accent-red);
+        }
+
+        .concentration-alert.warning {
+            background: rgba(210, 153, 34, 0.1);
+            border-color: var(--accent-yellow);
+            color: var(--accent-yellow);
+        }
+
+        /* Tier Distribution */
+        .tier-chart {
+            display: flex;
+            gap: 8px;
+            height: 24px;
+            border-radius: 6px;
+            overflow: hidden;
+            margin-bottom: 12px;
+        }
+
+        .tier-segment {
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            font-weight: 500;
+            color: white;
+            min-width: 40px;
+            transition: flex 0.5s ease;
+        }
+
+        .tier-segment.budget { background: var(--accent-green); }
+        .tier-segment.standard { background: var(--accent-blue); }
+        .tier-segment.premium { background: var(--accent-purple); }
+        .tier-segment.thinking { background: var(--accent-yellow); }
+        .tier-segment.research { background: var(--accent-red); }
+
+        .tier-legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-top: 12px;
+        }
+
+        .tier-legend-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        .tier-legend-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 2px;
+        }
+
+        /* Daily Chart */
+        .daily-chart {
+            display: flex;
+            align-items: flex-end;
+            gap: 4px;
+            height: 120px;
+            padding-top: 20px;
+        }
+
+        .daily-bar {
+            flex: 1;
+            background: linear-gradient(180deg, var(--accent-blue), var(--accent-purple));
+            border-radius: 4px 4px 0 0;
+            min-height: 4px;
+            position: relative;
+            transition: height 0.5s ease;
+        }
+
+        .daily-bar:hover {
+            opacity: 0.8;
+        }
+
+        .daily-bar::after {
+            content: attr(data-value);
+            position: absolute;
+            bottom: 100%;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 10px;
+            color: var(--text-secondary);
+            white-space: nowrap;
+            opacity: 0;
+            transition: opacity 0.2s;
+        }
+
+        .daily-bar:hover::after {
+            opacity: 1;
+        }
+
+        .daily-labels {
+            display: flex;
+            gap: 4px;
+            margin-top: 8px;
+        }
+
+        .daily-labels span {
+            flex: 1;
+            text-align: center;
+            font-size: 10px;
+            color: var(--text-tertiary);
+        }
+
+        /* Agent Stats */
+        .agent-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 12px;
+        }
+
+        .agent-card {
+            background: var(--bg-tertiary);
+            border-radius: 8px;
+            padding: 12px;
+            text-align: center;
+        }
+
+        .agent-card .role {
+            font-size: 20px;
+            margin-bottom: 4px;
+        }
+
+        .agent-card .name {
+            font-size: 12px;
+            font-weight: 500;
+            color: var(--text-primary);
+            margin-bottom: 8px;
+        }
+
+        .agent-card .cost {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--accent-green);
+        }
+
+        .agent-card .calls {
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+
+        /* Efficiency Metrics */
+        .efficiency-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 16px;
+        }
+
+        .efficiency-item {
+            background: var(--bg-tertiary);
+            border-radius: 8px;
+            padding: 16px;
+        }
+
+        .efficiency-item .metric-label {
+            font-size: 11px;
+            color: var(--text-tertiary);
+            text-transform: uppercase;
+            margin-bottom: 6px;
+        }
+
+        .efficiency-item .metric-value {
+            font-size: 24px;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .efficiency-item .metric-sub {
+            font-size: 11px;
+            color: var(--text-secondary);
+            margin-top: 4px;
+        }
+
+        /* Loading State */
+        .loading {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 40px;
+            color: var(--text-secondary);
+        }
+
+        .loading::after {
+            content: '';
+            width: 20px;
+            height: 20px;
+            border: 2px solid var(--border-color);
+            border-top-color: var(--accent-blue);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-left: 10px;
+        }
+
+        @media (max-width: 1024px) {
+            .charts-section {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .summary-cards {
+                grid-template-columns: repeat(2, 1fr);
+            }
+
+            .dashboard-header {
+                flex-direction: column;
+                gap: 16px;
+                align-items: flex-start;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="cost-dashboard">
+        <div class="dashboard-header">
+            <div>
+                <a href="/" class="back-link">← Back to Chat</a>
+                <h1>
+                    <span>💰</span>
+                    Cost Dashboard
+                </h1>
+            </div>
+            <div class="period-selector">
+                <button class="period-btn" data-days="7">7일</button>
+                <button class="period-btn active" data-days="30">30일</button>
+                <button class="period-btn" data-days="90">90일</button>
+            </div>
+        </div>
+
+        <!-- Summary Cards -->
+        <div class="summary-cards" id="summary-cards">
+            <div class="loading">Loading...</div>
+        </div>
+
+        <!-- Charts Section -->
+        <div class="charts-section">
+            <!-- Daily Chart -->
+            <div class="chart-card">
+                <h3>📊 일별 비용 추이</h3>
+                <div id="daily-chart-container">
+                    <div class="loading">Loading...</div>
+                </div>
+            </div>
+
+            <!-- Tier Distribution -->
+            <div class="chart-card">
+                <h3>🎯 티어별 사용 분포</h3>
+                <div id="tier-chart-container">
+                    <div class="loading">Loading...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Model Stats & Agent Stats -->
+        <div class="charts-section">
+            <!-- Model Stats -->
+            <div class="chart-card">
+                <h3>🤖 모델별 호출 통계</h3>
+                <div id="model-stats-container">
+                    <div class="loading">Loading...</div>
+                </div>
+            </div>
+
+            <!-- Agent Stats -->
+            <div class="chart-card">
+                <h3>👥 에이전트별 비용</h3>
+                <div id="agent-stats-container">
+                    <div class="loading">Loading...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Efficiency Metrics -->
+        <div class="chart-card">
+            <h3>⚡ 비용 효율성 지표</h3>
+            <div id="efficiency-container">
+                <div class="loading">Loading...</div>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/costs.js') }}"></script>
+</body>
+</html>

@@ -20,7 +20,7 @@ import os
 
 # DB 함수 import
 try:
-    import database as db
+    from . import database as db
     HAS_DB = True
 except ImportError:
     HAS_DB = False

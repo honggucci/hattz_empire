@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hattz Empire - Agent Monitor</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        body {
+            background: #0a0a0f;
+            color: #e0e0e0;
+            font-family: 'JetBrains Mono', monospace;
+            margin: 0;
+            padding: 20px;
+        }
+
+        .monitor-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid #2a2a3a;
+        }
+
+        .monitor-header h1 {
+            margin: 0;
+            color: #00ff88;
+            font-size: 1.5rem;
+        }
+
+        .monitor-header a {
+            color: #888;
+            text-decoration: none;
+        }
+
+        .monitor-header a:hover {
+            color: #00ff88;
+        }
+
+        .stats-row {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 25px;
+        }
+
+        .stat-card {
+            background: #12121a;
+            border: 1px solid #2a2a3a;
+            border-radius: 8px;
+            padding: 15px;
+        }
+
+        .stat-card h3 {
+            margin: 0 0 10px 0;
+            color: #888;
+            font-size: 0.85rem;
+            text-transform: uppercase;
+        }
+
+        .stat-value {
+            font-size: 2rem;
+            font-weight: 600;
+            color: #00ff88;
+        }
+
+        .stat-value.warning { color: #ffaa00; }
+        .stat-value.error { color: #ff4444; }
+
+        .section {
+            background: #12121a;
+            border: 1px solid #2a2a3a;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+
+        .section h2 {
+            margin: 0 0 15px 0;
+            font-size: 1.1rem;
+            color: #00ff88;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .section h2 .count {
+            background: #00ff8833;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 0.8rem;
+        }
+
+        .task-list {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .task-item {
+            background: #1a1a24;
+            border: 1px solid #2a2a3a;
+            border-radius: 6px;
+            padding: 12px 15px;
+            display: grid;
+            grid-template-columns: auto 1fr auto auto;
+            gap: 15px;
+            align-items: center;
+        }
+
+        .task-item.running {
+            border-color: #00ff8855;
+            animation: pulse 2s infinite;
+        }
+
+        .task-item.failed {
+            border-color: #ff444455;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+
+        .task-agent {
+            font-weight: 600;
+            color: #00aaff;
+            min-width: 80px;
+        }
+
+        .task-agent.coder { color: #ff6b6b; }
+        .task-agent.qa, .task-agent.qa_logic { color: #ffd93d; }
+        .task-agent.researcher { color: #6bcb77; }
+        .task-agent.strategy { color: #9b59b6; }
+        .task-agent.pm { color: #00ff88; }
+
+        .task-desc {
+            color: #aaa;
+            font-size: 0.9rem;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .task-status {
+            padding: 3px 10px;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            text-transform: uppercase;
+        }
+
+        .task-status.running {
+            background: #00ff8833;
+            color: #00ff88;
+        }
+
+        .task-status.success {
+            background: #00aaff33;
+            color: #00aaff;
+        }
+
+        .task-status.failed {
+            background: #ff444433;
+            color: #ff4444;
+        }
+
+        .task-duration {
+            color: #666;
+            font-size: 0.85rem;
+            min-width: 80px;
+            text-align: right;
+        }
+
+        .empty-state {
+            text-align: center;
+            color: #555;
+            padding: 30px;
+        }
+
+        .agents-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+        }
+
+        .agent-card {
+            background: #1a1a24;
+            border: 1px solid #2a2a3a;
+            border-radius: 6px;
+            padding: 15px;
+            text-align: center;
+        }
+
+        .agent-card.active {
+            border-color: #00ff8855;
+        }
+
+        .agent-name {
+            font-weight: 600;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+        }
+
+        .agent-count {
+            font-size: 1.5rem;
+            color: #00ff88;
+        }
+
+        .agent-count.idle {
+            color: #555;
+        }
+
+        .refresh-info {
+            color: #555;
+            font-size: 0.8rem;
+            text-align: right;
+        }
+
+        .error-msg {
+            color: #ff6b6b;
+            font-size: 0.85rem;
+            margin-top: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="monitor-header">
+        <h1>Agent Monitor</h1>
+        <div>
+            <span class="refresh-info">자동 갱신: 1초</span>
+            <a href="/chat">← 채팅으로 돌아가기</a>
+        </div>
+    </div>
+
+    <!-- Stats Row -->
+    <div class="stats-row">
+        <div class="stat-card">
+            <h3>활성 작업</h3>
+            <div class="stat-value" id="active-count">0</div>
+        </div>
+        <div class="stat-card">
+            <h3>최근 완료</h3>
+            <div class="stat-value" id="completed-count">0</div>
+        </div>
+        <div class="stat-card">
+            <h3>임베딩 큐</h3>
+            <div class="stat-value" id="embedding-queue">-</div>
+        </div>
+    </div>
+
+    <!-- Agents Status -->
+    <div class="section">
+        <h2>에이전트 상태</h2>
+        <div class="agents-grid" id="agents-grid">
+            <!-- 동적으로 채워짐 -->
+        </div>
+    </div>
+
+    <!-- Active Tasks -->
+    <div class="section">
+        <h2>
+            실행 중인 작업
+            <span class="count" id="active-task-count">0</span>
+        </h2>
+        <div class="task-list" id="active-tasks">
+            <div class="empty-state">실행 중인 작업이 없습니다</div>
+        </div>
+    </div>
+
+    <!-- Recent Completed -->
+    <div class="section">
+        <h2>
+            최근 완료된 작업
+            <span class="count" id="completed-task-count">0</span>
+        </h2>
+        <div class="task-list" id="completed-tasks">
+            <div class="empty-state">완료된 작업이 없습니다</div>
+        </div>
+    </div>
+
+    <script>
+        const AGENTS = ['pm', 'coder', 'qa', 'qa_logic', 'researcher', 'strategy', 'secretary'];
+
+        function formatDuration(ms) {
+            if (!ms) return '-';
+            if (ms < 1000) return `${ms}ms`;
+            if (ms < 60000) return `${(ms/1000).toFixed(1)}s`;
+            return `${(ms/60000).toFixed(1)}m`;
+        }
+
+        function renderTask(task) {
+            const agentClass = task.agent.toLowerCase().replace('_', '-');
+            return `
+                <div class="task-item ${task.status}">
+                    <span class="task-agent ${agentClass}">${task.agent.toUpperCase()}</span>
+                    <span class="task-desc" title="${task.description}">${task.description}</span>
+                    <span class="task-status ${task.status}">${task.status}</span>
+                    <span class="task-duration">${formatDuration(task.duration_ms)}</span>
+                    ${task.error_message ? `<div class="error-msg">${task.error_message}</div>` : ''}
+                </div>
+            `;
+        }
+
+        function renderAgentCard(agent, count) {
+            const isActive = count > 0;
+            return `
+                <div class="agent-card ${isActive ? 'active' : ''}">
+                    <div class="agent-name">${agent.toUpperCase()}</div>
+                    <div class="agent-count ${isActive ? '' : 'idle'}">${count}</div>
+                </div>
+            `;
+        }
+
+        async function updateDashboard() {
+            try {
+                const res = await fetch('/api/monitor/dashboard');
+                const data = await res.json();
+
+                // Stats
+                document.getElementById('active-count').textContent = data.active_count || 0;
+                document.getElementById('completed-count').textContent = data.recent_completed?.length || 0;
+                document.getElementById('active-task-count').textContent = data.active_count || 0;
+                document.getElementById('completed-task-count').textContent = data.recent_completed?.length || 0;
+
+                // Agents Grid
+                const agentsHtml = AGENTS.map(agent => {
+                    const count = data.agents_summary?.[agent] || 0;
+                    return renderAgentCard(agent, count);
+                }).join('');
+                document.getElementById('agents-grid').innerHTML = agentsHtml;
+
+                // Active Tasks
+                const activeTasks = data.active_tasks || [];
+                if (activeTasks.length > 0) {
+                    document.getElementById('active-tasks').innerHTML = activeTasks.map(renderTask).join('');
+                } else {
+                    document.getElementById('active-tasks').innerHTML = '<div class="empty-state">실행 중인 작업이 없습니다</div>';
+                }
+
+                // Completed Tasks
+                const completedTasks = data.recent_completed || [];
+                if (completedTasks.length > 0) {
+                    document.getElementById('completed-tasks').innerHTML = completedTasks.map(renderTask).join('');
+                } else {
+                    document.getElementById('completed-tasks').innerHTML = '<div class="empty-state">완료된 작업이 없습니다</div>';
+                }
+
+            } catch (err) {
+                console.error('Dashboard update failed:', err);
+            }
+        }
+
+        async function updateEmbeddingQueue() {
+            try {
+                const res = await fetch('/api/health/embedding-queue');
+                const data = await res.json();
+                const el = document.getElementById('embedding-queue');
+                el.textContent = data.pending || 0;
+                el.className = 'stat-value' + (data.pending > 10 ? ' warning' : '');
+            } catch (err) {
+                document.getElementById('embedding-queue').textContent = '?';
+            }
+        }
+
+        // 초기 로드
+        updateDashboard();
+        updateEmbeddingQueue();
+
+        // 자동 갱신
+        setInterval(updateDashboard, 1000);
+        setInterval(updateEmbeddingQueue, 5000);
+    </script>
+</body>
+</html>

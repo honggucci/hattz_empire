@@ -1,0 +1,114 @@
+# Hattz Empire - Docker Compose Configuration
+# 실행: docker-compose up -d
+# 종료: docker-compose down
+# 로그: docker-compose logs -f
+
+version: '3.8'
+
+services:
+  # =====================
+  # Web + API Server
+  # =====================
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: hattz-web
+    ports:
+      - "5000:5000"
+    environment:
+      - FLASK_ENV=production
+      - FLASK_SECRET_KEY=${FLASK_SECRET_KEY:-hattz-empire-docker-secret}
+      # LLM API Keys (호스트 환경변수에서 가져옴)
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      # Database
+      - DB_SERVER=${DB_SERVER:-host.docker.internal}
+      - DB_PORT=${DB_PORT:-1433}
+      - DB_NAME=${DB_NAME:-hattz_empire}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+    volumes:
+      # 프로젝트 컨텍스트 (읽기 전용)
+      - ./projects:/app/projects:ro
+      # 로그
+      - ./logs:/app/logs
+    networks:
+      - hattz-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/api/health/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # =====================
+  # Monitor (ctop 대안 - Cadvisor)
+  # =====================
+  monitor:
+    image: gcr.io/cadvisor/cadvisor:latest
+    container_name: hattz-monitor
+    ports:
+      - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    networks:
+      - hattz-network
+    restart: unless-stopped
+    # Windows에서는 일부 볼륨 마운트가 다를 수 있음
+    # WSL2 사용 시 정상 작동
+
+  # =====================
+  # Tunnel (ngrok)
+  # 현재 도메인: caitlyn-supercivilized-intrudingly.ngrok-free.app
+  # =====================
+  tunnel:
+    image: ngrok/ngrok:latest
+    container_name: hattz-tunnel
+    environment:
+      - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN}
+    # 고정 도메인 사용 (유료 플랜 필요)
+    # command: http --domain=caitlyn-supercivilized-intrudingly.ngrok-free.app web:5000
+    command: http web:5000
+    ports:
+      - "4040:4040"  # ngrok 관리 UI
+    networks:
+      - hattz-network
+    depends_on:
+      - web
+    profiles:
+      - tunnel  # docker-compose --profile tunnel up 으로만 실행
+    restart: unless-stopped
+
+  # =====================
+  # Redis (세션/캐시용 - 선택사항)
+  # =====================
+  redis:
+    image: redis:alpine
+    container_name: hattz-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - hattz-network
+    profiles:
+      - cache  # docker-compose --profile cache up 으로만 실행
+    restart: unless-stopped
+
+# =====================
+# Networks
+# =====================
+networks:
+  hattz-network:
+    driver: bridge
+
+# =====================
+# Volumes
+# =====================
+volumes:
+  redis-data:
