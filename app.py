@@ -28,6 +28,8 @@ from auth import init_login, get_user, verify_password, User
 from agent_scorecard import get_scorecard, FeedbackType
 from router import get_router, route_message, route_and_call, TaskType, UrgencyLevel
 import background_tasks as bg
+from circuit_breaker import get_breaker
+from council import get_council, Verdict, COUNCIL_TYPES, PERSONAS
 
 # =============================================================================
 # LLM API Clients
@@ -1617,6 +1619,163 @@ def cancel_background_task(task_id: str):
         return jsonify({'status': 'cancelled', 'task_id': task_id})
     else:
         return jsonify({'error': 'Cannot cancel task'}), 400
+
+
+# =============================================================================
+# Circuit Breaker API
+# =============================================================================
+
+@app.route('/api/breaker/status', methods=['GET'])
+def get_breaker_status():
+    """Circuit Breaker 상태 조회"""
+    breaker = get_breaker()
+    return jsonify(breaker.get_status())
+
+
+@app.route('/api/breaker/task/<task_id>', methods=['GET'])
+def get_breaker_task_status(task_id: str):
+    """태스크별 브레이커 상태 조회"""
+    breaker = get_breaker()
+    status = breaker.get_task_status(task_id)
+    if not status:
+        return jsonify({'error': 'Task not found'}), 404
+    return jsonify(status)
+
+
+@app.route('/api/breaker/reset', methods=['POST'])
+@login_required
+def reset_breaker():
+    """Circuit Breaker 리셋 (CEO 권한)"""
+    breaker = get_breaker()
+    breaker.reset_breaker()
+    return jsonify({'status': 'reset', 'state': breaker.state.value})
+
+
+@app.route('/api/breaker/stop/<task_id>', methods=['POST'])
+def force_stop_task(task_id: str):
+    """태스크 강제 중단"""
+    data = request.json or {}
+    reason = data.get('reason', '수동 중단')
+
+    breaker = get_breaker()
+    breaker.force_stop(task_id, reason)
+    return jsonify({'status': 'stopped', 'task_id': task_id, 'reason': reason})
+
+
+# =============================================================================
+# Persona Council API
+# =============================================================================
+
+@app.route('/api/council/types', methods=['GET'])
+def get_council_types():
+    """위원회 유형 목록 조회"""
+    types = []
+    for key, config in COUNCIL_TYPES.items():
+        types.append({
+            'id': key,
+            'name': config['name'],
+            'description': config['description'],
+            'personas': config['personas'],
+            'pass_threshold': config['pass_threshold'],
+        })
+    return jsonify({'council_types': types})
+
+
+@app.route('/api/council/personas', methods=['GET'])
+def get_personas():
+    """페르소나 목록 조회"""
+    personas = []
+    for key, config in PERSONAS.items():
+        personas.append({
+            'id': config.id,
+            'name': config.name,
+            'icon': config.icon,
+            'temperature': config.temperature,
+        })
+    return jsonify({'personas': personas})
+
+
+@app.route('/api/council/convene', methods=['POST'])
+def convene_council():
+    """
+    위원회 소집 API
+
+    Request JSON:
+    {
+        "council_type": "code",
+        "content": "검토할 내용",
+        "context": "추가 컨텍스트 (선택)"
+    }
+
+    Response:
+    {
+        "verdict": "pass/conditional/fail/ceo_review",
+        "average_score": 7.5,
+        "score_std": 1.2,
+        "judges": [...],
+        "summary": "요약",
+        "requires_ceo": false
+    }
+    """
+    data = request.json
+    council_type = data.get('council_type', 'code')
+    content = data.get('content', '')
+    context = data.get('context', '')
+
+    if not content:
+        return jsonify({'error': 'content required'}), 400
+
+    if council_type not in COUNCIL_TYPES:
+        return jsonify({'error': f'Unknown council type: {council_type}'}), 400
+
+    council = get_council()
+
+    # 동기 호출 (Flask는 기본적으로 동기)
+    verdict = council.convene_sync(council_type, content, context)
+
+    return jsonify({
+        'council_type': verdict.council_type,
+        'verdict': verdict.verdict.value,
+        'average_score': verdict.average_score,
+        'score_std': verdict.score_std,
+        'judges': [
+            {
+                'persona_id': j.persona_id,
+                'persona_name': j.persona_name,
+                'icon': j.icon,
+                'score': j.score,
+                'reasoning': j.reasoning,
+                'concerns': j.concerns,
+                'approvals': j.approvals,
+            }
+            for j in verdict.judges
+        ],
+        'summary': verdict.summary,
+        'requires_ceo': verdict.requires_ceo,
+        'timestamp': verdict.timestamp,
+    })
+
+
+@app.route('/api/council/history', methods=['GET'])
+def get_council_history():
+    """위원회 판정 히스토리 조회"""
+    limit = request.args.get('limit', 10, type=int)
+    council = get_council()
+    history = council.get_history(limit)
+
+    return jsonify({
+        'history': [
+            {
+                'council_type': v.council_type,
+                'verdict': v.verdict.value,
+                'average_score': v.average_score,
+                'requires_ceo': v.requires_ceo,
+                'timestamp': v.timestamp,
+            }
+            for v in history
+        ],
+        'total': len(history)
+    })
 
 
 if __name__ == '__main__':
