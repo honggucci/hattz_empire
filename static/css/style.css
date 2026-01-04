@@ -644,6 +644,33 @@ body {
     border-color: var(--accent-yellow);
 }
 
+/* Remote Badge - 다른 기기에서 실행 중 표시 */
+.remote-badge {
+    position: absolute;
+    right: 60px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: linear-gradient(135deg, rgba(163, 113, 247, 0.3), rgba(88, 166, 255, 0.3));
+    color: var(--text-primary);
+    font-size: 10px;
+    padding: 4px 8px;
+    border-radius: 12px;
+    border: 1px solid var(--accent-purple);
+    animation: pulse-badge 2s ease-in-out infinite;
+    white-space: nowrap;
+}
+
+@keyframes pulse-badge {
+    0%, 100% {
+        opacity: 1;
+        box-shadow: 0 0 5px rgba(163, 113, 247, 0.4);
+    }
+    50% {
+        opacity: 0.8;
+        box-shadow: 0 0 15px rgba(163, 113, 247, 0.6);
+    }
+}
+
 /* Abort Button */
 .abort-button {
     display: flex;

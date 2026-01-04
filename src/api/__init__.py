@@ -18,11 +18,12 @@ council_bp = Blueprint('council', __name__, url_prefix='/api/council')
 health_bp = Blueprint('health', __name__, url_prefix='/api/health')
 cost_bp = Blueprint('cost', __name__, url_prefix='/costs')
 monitor_bp = Blueprint('monitor', __name__, url_prefix='/api/monitor')
+events_bp = Blueprint('events', __name__, url_prefix='/api/events')
 
 
 def register_blueprints(app):
     """모든 Blueprint를 앱에 등록"""
-    from . import auth, chat, sessions, execute, rag_api, scores, router_api, tasks, breaker, council_api, health, costs, monitor
+    from . import auth, chat, sessions, execute, rag_api, scores, router_api, tasks, breaker, council_api, health, costs, monitor, events
     from .wpcn import wpcn_bp  # WPCN API
 
     app.register_blueprint(auth_bp)
@@ -38,4 +39,5 @@ def register_blueprints(app):
     app.register_blueprint(health_bp)
     app.register_blueprint(cost_bp)
     app.register_blueprint(monitor_bp)
+    app.register_blueprint(events_bp)  # SSE Events
     app.register_blueprint(wpcn_bp)  # WPCN API

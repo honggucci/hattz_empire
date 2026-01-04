@@ -18,6 +18,7 @@ from src.core.llm_caller import call_agent, process_call_tags, build_call_result
 from src.core.session_state import get_current_session, set_current_session
 from src.services.agent_monitor import get_agent_monitor
 from src.services.fact_checker import fact_check, format_fact_check_result
+from src.services.task_events import emit_progress, emit_stage_change, emit_complete, emit_error
 import src.services.database as db
 import src.services.executor as executor
 
@@ -124,6 +125,9 @@ def chat_stream():
             yield f"data: {json.dumps({'session_id': session_id, 'stream_id': stream_id}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'stage': 'thinking', 'agent': agent_role}, ensure_ascii=False)}\n\n"
 
+            # SSE broadcast: thinking stage (cross-device sync)
+            emit_stage_change(session_id, 'thinking', agent_role)
+
             model_meta = None
             if use_mock:
                 response = mock_agent_response(user_message, agent_role)
@@ -141,6 +145,9 @@ def chat_stream():
                 yield f"data: {json.dumps({'model_info': model_meta, 'agent': agent_role}, ensure_ascii=False)}\n\n"
 
             yield f"data: {json.dumps({'stage': 'responding', 'agent': agent_role}, ensure_ascii=False)}\n\n"
+
+            # SSE broadcast: responding stage
+            emit_stage_change(session_id, 'responding', agent_role)
 
             words = response.split(' ')
             full_response = []
@@ -200,6 +207,9 @@ def chat_stream():
                 # 하위 에이전트 호출 시작 알림
                 yield f"data: {json.dumps({'stage': 'delegating', 'total_agents': total_calls, 'agents': [c['agent'] for c in call_infos]}, ensure_ascii=False)}\n\n"
 
+                # SSE broadcast: delegating stage
+                emit_progress(session_id, 'delegating', agent_role, 35, total_agents=total_calls)
+
                 call_results = []
                 monitor = get_agent_monitor()
 
@@ -225,6 +235,9 @@ def chat_stream():
                     # 하위 에이전트 작업 시작 알림
                     yield f"data: {json.dumps({'stage': 'calling', 'sub_agent': sub_agent, 'task_id': task_id, 'progress': f'{idx+1}/{total_calls}', 'message_preview': sub_message[:100]}, ensure_ascii=False)}\n\n"
 
+                    # SSE broadcast: calling sub-agent
+                    emit_progress(session_id, 'calling', agent_role, 40 + (idx * 10), sub_agent=sub_agent, total_agents=total_calls)
+
                     try:
                         # 하위 에이전트 호출
                         sub_response, sub_meta = call_agent(sub_message, sub_agent, auto_execute=True, use_translation=False, return_meta=True)
@@ -249,6 +262,9 @@ def chat_stream():
                     # 하위 에이전트 완료 알림
                     yield f"data: {json.dumps({'stage': 'sub_agent_done', 'sub_agent': sub_agent, 'task_id': task_id, 'progress': f'{idx+1}/{total_calls}', 'response_length': len(sub_response), 'model_info': sub_meta}, ensure_ascii=False)}\n\n"
 
+                    # SSE broadcast: sub-agent done
+                    emit_progress(session_id, 'sub_agent_done', agent_role, 50 + (idx * 10), sub_agent=sub_agent, total_agents=total_calls)
+
                     call_results.append({
                         'agent': sub_agent,
                         'message': sub_message,
@@ -263,11 +279,18 @@ def chat_stream():
                 if call_results:
                     yield f"data: {json.dumps({'stage': 'summarizing', 'agent': agent_role}, ensure_ascii=False)}\n\n"
 
+                    # SSE broadcast: summarizing stage
+                    emit_stage_change(session_id, 'summarizing', agent_role)
+
                     followup_prompt = build_call_results_prompt(call_results)
                     final_response, final_meta = call_agent(followup_prompt, agent_role, return_meta=True)
 
                     # 최종 응답 스트리밍
                     yield f"data: {json.dumps({'stage': 'final_response', 'agent': agent_role}, ensure_ascii=False)}\n\n"
+
+                    # SSE broadcast: final_response stage
+                    emit_stage_change(session_id, 'final_response', agent_role)
+
                     final_words = final_response.split(' ')
                     for word in final_words:
                         if not active_streams.get(stream_id, False):
@@ -280,12 +303,19 @@ def chat_stream():
 
                     # 모든 작업 완료
                     yield f"data: {json.dumps({'done': True, 'full_response': final_response, 'session_id': session_id, 'model_info': final_meta, 'agents_called': [c['agent'] for c in call_results]}, ensure_ascii=False)}\n\n"
+
+                    # SSE broadcast: complete
+                    emit_complete(session_id, agent_role, final_meta)
                 else:
                     # CALL 태그는 있었지만 결과가 없음
                     yield f"data: {json.dumps({'done': True, 'full_response': pm_response, 'session_id': session_id, 'model_info': model_meta}, ensure_ascii=False)}\n\n"
+                    # SSE broadcast: complete
+                    emit_complete(session_id, agent_role, model_meta)
             else:
                 # CALL 태그 없음 - PM 응답으로 완료
                 yield f"data: {json.dumps({'done': True, 'full_response': pm_response, 'session_id': session_id, 'model_info': model_meta}, ensure_ascii=False)}\n\n"
+                # SSE broadcast: complete
+                emit_complete(session_id, agent_role, model_meta)
 
         finally:
             # 스트림 정리

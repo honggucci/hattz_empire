@@ -115,6 +115,9 @@ async function sendMessage() {
     // Create AbortController for this request
     currentAbortController = new AbortController();
 
+    // 로컬 요청 플래그 설정 (SSE 이벤트 중복 방지)
+    isLocalRequest = true;
+
     try {
         // Use streaming endpoint - 세션 ID 함께 전송
         const response = await fetch('/api/chat/stream', {
@@ -289,6 +292,7 @@ async function sendMessage() {
         // done: true 받았을 때만 프로그레스바 숨김
         setStatus('Ready', false);
         currentAbortController = null;
+        isLocalRequest = false;  // 로컬 요청 완료
 
         // 모델 정보 뱃지 추가 (응답 완료 후)
         // 최종 응답 메시지가 있으면 거기에, 없으면 첫 응답에 추가
@@ -305,6 +309,7 @@ async function sendMessage() {
 
     } catch (error) {
         currentAbortController = null;
+        isLocalRequest = false;  // 로컬 요청 완료 (에러 시에도)
 
         // AbortError는 사용자가 중단한 것
         if (error.name === 'AbortError') {
@@ -789,6 +794,11 @@ async function switchSession(sessionId) {
         // 모바일에서 사이드바 닫기
         if (typeof closeMobileSidebar === 'function') {
             closeMobileSidebar();
+        }
+
+        // SSE 재연결 (새 세션으로)
+        if (typeof reconnectProgressSSE === 'function') {
+            reconnectProgressSSE();
         }
 
     } catch (error) {
@@ -1698,3 +1708,213 @@ if (sidebarOverlay) {
 }
 
 // 세션 선택 시 모바일에서 사이드바 닫기 (이벤트 리스너에서 처리)
+
+
+// =============================================================================
+// SSE Progress Sync - Cross-device Progress Bar Synchronization
+// =============================================================================
+
+let progressEventSource = null;
+let isLocalRequest = false;  // 현재 디바이스에서 요청 중인지
+
+/**
+ * SSE 연결 시작 (다른 디바이스의 진행 상태 수신)
+ */
+function connectProgressSSE() {
+    // 이미 연결되어 있으면 무시
+    if (progressEventSource && progressEventSource.readyState !== EventSource.CLOSED) {
+        return;
+    }
+
+    // 세션 ID가 없으면 global로 구독
+    const sessionParam = currentSessionId ? `?session_id=${currentSessionId}` : '?session_id=global';
+    progressEventSource = new EventSource(`/api/events/progress${sessionParam}`);
+
+    progressEventSource.onopen = () => {
+        console.log('[SSE] Progress stream connected');
+    };
+
+    progressEventSource.onmessage = (event) => {
+        try {
+            const data = JSON.parse(event.data);
+
+            // heartbeat 무시
+            if (data.event_type === 'heartbeat') {
+                return;
+            }
+
+            // 현재 디바이스에서 요청 중이면 SSE 이벤트 무시 (중복 방지)
+            if (isLocalRequest && data.event_type !== 'complete') {
+                return;
+            }
+
+            console.log('[SSE] Progress event:', data.event_type, data.stage);
+
+            // 이벤트 타입별 처리
+            switch (data.event_type) {
+                case 'progress':
+                case 'stage_change':
+                    showRemoteProgress(data);
+                    break;
+                case 'complete':
+                    hideRemoteProgress();
+                    break;
+                case 'error':
+                    showRemoteError(data.message);
+                    break;
+            }
+        } catch (e) {
+            console.error('[SSE] Parse error:', e);
+        }
+    };
+
+    progressEventSource.onerror = (error) => {
+        console.error('[SSE] Connection error:', error);
+        // 5초 후 재연결 시도
+        setTimeout(() => {
+            if (progressEventSource) {
+                progressEventSource.close();
+            }
+            connectProgressSSE();
+        }, 5000);
+    };
+}
+
+/**
+ * SSE 연결 종료
+ */
+function disconnectProgressSSE() {
+    if (progressEventSource) {
+        progressEventSource.close();
+        progressEventSource = null;
+        console.log('[SSE] Progress stream disconnected');
+    }
+}
+
+/**
+ * 다른 디바이스의 진행 상태 표시
+ */
+function showRemoteProgress(data) {
+    const processingBar = document.getElementById('processing-bar');
+    if (!processingBar) return;
+
+    // 프로그레스바 표시
+    processingBar.classList.remove('hidden');
+
+    // 단계별 텍스트 매핑
+    const stageInfo = {
+        'thinking': { icon: '🤔', text: 'PM이 생각 중' },
+        'responding': { icon: '✍️', text: 'PM 응답 중' },
+        'delegating': { icon: '🚀', text: '에이전트 위임 중' },
+        'calling': { icon: '📞', text: '에이전트 호출 중' },
+        'sub_agent_done': { icon: '✅', text: '에이전트 완료' },
+        'summarizing': { icon: '📝', text: 'PM이 결과 종합 중' },
+        'final_response': { icon: '✨', text: 'PM 최종 응답 중' },
+        'idle': { icon: '⏸️', text: '대기 중' }
+    };
+
+    const info = stageInfo[data.stage] || stageInfo['thinking'];
+
+    // 프로그레스바 업데이트
+    const processingIcon = processingBar.querySelector('.processing-icon');
+    const processingText = processingBar.querySelector('.processing-text');
+    const processingStage = document.getElementById('processing-stage');
+
+    if (processingIcon) {
+        processingIcon.textContent = info.icon;
+    }
+
+    if (processingText) {
+        let displayText = info.text;
+        // 하위 에이전트 정보 포함
+        if (data.sub_agent && (data.stage === 'calling' || data.stage === 'sub_agent_done')) {
+            displayText = `${data.sub_agent.toUpperCase()} ${data.stage === 'calling' ? '작업 중' : '완료'}`;
+        }
+        const dotsHtml = '<span class="processing-dots"><span></span><span></span><span></span></span>';
+        processingText.innerHTML = `${displayText}${dotsHtml}`;
+    }
+
+    if (processingStage) {
+        let stageDisplay = data.stage.toUpperCase().replace('_', ' ');
+        if (data.sub_agent) {
+            stageDisplay = `${data.sub_agent.toUpperCase()} → ${stageDisplay}`;
+        }
+        processingStage.textContent = stageDisplay;
+    }
+
+    // 상태 dot 업데이트
+    const statusDot = document.querySelector('.status-dot');
+    if (statusDot) {
+        statusDot.classList.add('loading');
+    }
+
+    // 원격 표시 배지 (다른 디바이스에서 실행 중임을 표시)
+    if (!processingBar.querySelector('.remote-badge')) {
+        const remoteBadge = document.createElement('span');
+        remoteBadge.className = 'remote-badge';
+        remoteBadge.textContent = '📱 다른 기기';
+        remoteBadge.title = '다른 기기에서 작업이 진행 중입니다';
+        processingBar.appendChild(remoteBadge);
+    }
+}
+
+/**
+ * 원격 진행 상태 숨기기
+ */
+function hideRemoteProgress() {
+    const processingBar = document.getElementById('processing-bar');
+    if (!processingBar) return;
+
+    // 프로그레스바 숨기기
+    processingBar.classList.add('hidden');
+
+    // 원격 배지 제거
+    const remoteBadge = processingBar.querySelector('.remote-badge');
+    if (remoteBadge) {
+        remoteBadge.remove();
+    }
+
+    // 상태 dot 업데이트
+    const statusDot = document.querySelector('.status-dot');
+    if (statusDot) {
+        statusDot.classList.remove('loading');
+    }
+
+    // 세션 목록 새로고침 (새 메시지가 추가되었을 수 있음)
+    loadSessions();
+}
+
+/**
+ * 원격 에러 표시
+ */
+function showRemoteError(message) {
+    console.error('[SSE] Remote error:', message);
+    hideRemoteProgress();
+}
+
+/**
+ * 세션 변경 시 SSE 재연결
+ */
+function reconnectProgressSSE() {
+    disconnectProgressSSE();
+    setTimeout(connectProgressSSE, 100);
+}
+
+// 페이지 로드 시 SSE 연결
+document.addEventListener('DOMContentLoaded', () => {
+    // 약간의 딜레이 후 SSE 연결 (세션 ID 로드 후)
+    setTimeout(connectProgressSSE, 1000);
+});
+
+// 페이지 종료 시 SSE 연결 해제
+window.addEventListener('beforeunload', () => {
+    disconnectProgressSSE();
+});
+
+// 가시성 변경 시 SSE 재연결 (탭 전환 등)
+document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+        // 탭이 다시 활성화되면 재연결
+        reconnectProgressSSE();
+    }
+});
