@@ -335,10 +335,11 @@ class PersonaCouncil:
         """
         Args:
             llm_caller: LLM 호출 함수
-                        async def llm_caller(system_prompt, user_message, temperature) -> str
+                        async def llm_caller(system_prompt, user_message, temperature, persona_id, council_type) -> str
         """
         self.llm_caller = llm_caller
         self.history: List[CouncilVerdict] = []
+        self.current_council_type: Optional[str] = None  # 현재 진행 중인 위원회 유형
 
     def set_llm_caller(self, caller: Callable):
         """LLM 호출 함수 설정"""
@@ -348,9 +349,10 @@ class PersonaCouncil:
         self,
         persona: PersonaConfig,
         content: str,
-        context: str = ""
+        context: str = "",
+        council_type: str = None
     ) -> JudgeScore:
-        """개별 페르소나 호출"""
+        """개별 페르소나 호출 (모델 매핑 지원)"""
 
         user_message = f"""다음 내용을 검토하고 점수를 매겨라.
 
@@ -371,18 +373,36 @@ class PersonaCouncil:
 
         if self.llm_caller:
             try:
+                # 확장된 시그니처: persona_id와 council_type 전달
                 response = await self.llm_caller(
                     persona.system_prompt,
                     user_message,
-                    persona.temperature
+                    persona.temperature,
+                    persona.id,           # persona_id 추가
+                    council_type          # council_type 추가
                 )
-                data = json.loads(response)
-            except Exception as e:
-                # 파싱 실패 시 기본값
+                # JSON 추출 (코드블록 안에 있을 수 있음)
+                json_str = response
+                if "```json" in response:
+                    json_str = response.split("```json")[1].split("```")[0]
+                elif "```" in response:
+                    json_str = response.split("```")[1].split("```")[0]
+                data = json.loads(json_str.strip())
+            except json.JSONDecodeError as e:
+                # JSON 파싱 실패 시 기본값
+                print(f"[Council] JSON 파싱 실패 ({persona.name}): {e}")
                 data = {
                     "score": 5.0,
-                    "reasoning": f"응답 파싱 실패: {str(e)}",
+                    "reasoning": f"응답 파싱 실패: JSON 형식 오류",
                     "concerns": ["응답 형식 오류"],
+                    "approvals": []
+                }
+            except Exception as e:
+                print(f"[Council] 호출 실패 ({persona.name}): {e}")
+                data = {
+                    "score": 5.0,
+                    "reasoning": f"호출 실패: {str(e)}",
+                    "concerns": ["API 호출 오류"],
                     "approvals": []
                 }
         else:
@@ -479,12 +499,15 @@ class PersonaCouncil:
         if council_type not in COUNCIL_TYPES:
             raise ValueError(f"Unknown council type: {council_type}")
 
+        self.current_council_type = council_type
         config = COUNCIL_TYPES[council_type]
         persona_ids = config["personas"]
 
-        # 병렬로 모든 페르소나 호출
+        print(f"[Council] {config['name']} 소집: {len(persona_ids)}명의 심사위원")
+
+        # 병렬로 모든 페르소나 호출 (council_type 전달)
         tasks = [
-            self._call_persona(PERSONAS[pid], content, context)
+            self._call_persona(PERSONAS[pid], content, context, council_type)
             for pid in persona_ids
         ]
         judges = await asyncio.gather(*tasks)

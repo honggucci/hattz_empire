@@ -1,10 +1,16 @@
 """
 Hattz Empire - LLM Caller
 LLM API 호출 및 에이전트 로직
+
+2026.01.04 업데이트:
+- 듀얼 엔진 와이어링 (Writer + Auditor 패턴)
+- 위원회 자동 소집 + 모델 할당
+- 루프 브레이커 추가
 """
 import os
 import time as time_module
-from typing import Optional
+import asyncio
+from typing import Optional, Tuple, Dict, Any
 
 import sys
 from pathlib import Path
@@ -18,6 +24,106 @@ from config import (
     MODELS, DUAL_ENGINES, SINGLE_ENGINES,
     get_system_prompt, ModelConfig
 )
+
+
+# =============================================================================
+# 듀얼 엔진 + 위원회 설정
+# =============================================================================
+
+# 듀얼 엔진 역할 정의 (Writer + Auditor)
+DUAL_ENGINE_ROLES = {
+    "coder": {
+        "writer": "claude_sonnet",      # Sonnet 4 - 빠른 코드 작성
+        "auditor": "gpt_4o_mini",        # 4o-mini - 저렴한 리뷰
+        "description": "코드 작성 + 리뷰"
+    },
+    "strategist": {
+        "writer": "gpt_thinking",        # GPT-5.2 Thinking - 전략 수립
+        "auditor": "claude_sonnet",      # Sonnet - 전략 검증
+        "description": "전략 수립 + 검증"
+    },
+    "qa": {
+        "writer": "gpt_4o_mini",         # 4o-mini - 빠른 테스트 생성
+        "auditor": "claude_sonnet",      # Sonnet - 보안/엣지케이스 검증
+        "description": "테스트 생성 + 검증"
+    },
+    "researcher": {
+        "writer": "gemini_pro",          # Gemini 3 Pro - 검색/수집
+        "auditor": "gpt_4o_mini",        # 4o-mini - 팩트체크
+        "description": "리서치 + 검증"
+    },
+    "excavator": {
+        "writer": "claude_sonnet",       # Sonnet - 의도 파악
+        "auditor": "gpt_4o_mini",        # 4o-mini - 확인
+        "description": "CEO 의도 발굴 + 확인"
+    },
+}
+
+# 위원회별 모델 할당 (저렴한 모델 위주, 타이브레이커만 비싼 모델)
+COUNCIL_MODEL_MAPPING = {
+    "code": {
+        "personas": {
+            "skeptic": "gpt_4o_mini",
+            "perfectionist": "claude_haiku",    # Haiku 없으면 4o-mini로 대체
+            "pragmatist": "gpt_4o_mini",
+        },
+        "tiebreaker": "claude_sonnet",           # 의견 갈릴 때 Sonnet
+    },
+    "strategy": {
+        "personas": {
+            "pessimist": "gpt_4o_mini",
+            "optimist": "claude_haiku",
+            "devils_advocate": "gpt_4o_mini",
+        },
+        "tiebreaker": "gpt_thinking",            # 전략은 GPT-5.2 Thinking
+    },
+    "security": {
+        "personas": {
+            "security_hawk": "claude_sonnet",    # 보안은 Sonnet 필수
+            "skeptic": "gpt_4o_mini",
+            "pessimist": "gpt_4o_mini",
+        },
+        "tiebreaker": "claude_opus",             # 보안 최종은 Opus
+    },
+    "deploy": {
+        "personas": {
+            "security_hawk": "claude_sonnet",
+            "pessimist": "gpt_4o_mini",
+            "pragmatist": "gpt_4o_mini",
+            "perfectionist": "claude_haiku",
+        },
+        "tiebreaker": "claude_opus",             # 배포 최종은 CEO(Opus)
+        "requires_ceo": True,
+    },
+    "mvp": {
+        "personas": {
+            "pragmatist": "gpt_4o_mini",
+            "optimist": "gpt_4o_mini",
+            "skeptic": "claude_haiku",
+        },
+        "tiebreaker": "claude_sonnet",
+    },
+}
+
+# 루프 브레이커 설정
+LOOP_BREAKER_CONFIG = {
+    "MAX_STAGE_RETRY": 2,      # 같은 단계 최대 재시도
+    "MAX_TOTAL_STEPS": 8,      # 전체 최대 단계
+    "SIMILARITY_THRESHOLD": 0.85,  # 반복 응답 감지 (85% 유사도)
+    "ESCALATE_TO_CEO": True,   # 루프 감지시 CEO 에스컬레이션
+}
+
+# Haiku 모델 추가 (저렴한 위원회용)
+if "claude_haiku" not in MODELS:
+    from config import ModelConfig as MC
+    MODELS["claude_haiku"] = MC(
+        name="Claude Haiku 3.5",
+        provider="anthropic",
+        model_id="claude-3-5-haiku-20241022",
+        api_key_env="ANTHROPIC_API_KEY",
+        temperature=0.3,
+        max_tokens=4096,
+    )
 
 from src.infra.stream import get_stream
 from src.core.router import get_router, route_message
@@ -153,7 +259,7 @@ def call_llm(model_config: ModelConfig, messages: list, system_prompt: str) -> s
 
 
 def call_dual_engine(role: str, messages: list, system_prompt: str) -> str:
-    """듀얼 엔진 호출 및 병합"""
+    """듀얼 엔진 호출 및 병합 (레거시 - config.py DUAL_ENGINES 사용)"""
     config = DUAL_ENGINES.get(role)
     if not config:
         return f"[Error] Unknown dual engine role: {role}"
@@ -196,6 +302,410 @@ def call_dual_engine(role: str, messages: list, system_prompt: str) -> str:
 
 
 # =============================================================================
+# 듀얼 엔진 V2 (Writer + Auditor 패턴)
+# =============================================================================
+
+def call_dual_engine_v2(
+    role: str,
+    messages: list,
+    system_prompt: str
+) -> Tuple[str, Dict[str, Any]]:
+    """
+    듀얼 엔진 V2: Writer + Auditor 패턴
+
+    1단계: Writer가 초안 작성
+    2단계: Auditor가 리뷰 및 수정 제안
+    3단계: 의견 불일치시 병합 또는 위원회 소집
+
+    Returns:
+        (최종 응답, 메타데이터)
+    """
+    if role not in DUAL_ENGINE_ROLES:
+        # 듀얼 엔진 역할이 아니면 단일 엔진으로 폴백
+        return call_llm(MODELS.get("claude_sonnet", MODELS["claude_opus"]), messages, system_prompt), {"dual": False}
+
+    config = DUAL_ENGINE_ROLES[role]
+    writer_model = MODELS.get(config["writer"], MODELS["claude_sonnet"])
+    auditor_model = MODELS.get(config["auditor"], MODELS["gpt_4o_mini"])
+
+    # 1단계: Writer 초안 작성
+    print(f"[Dual-V2] {role} Writer ({writer_model.name}) 작업 중...")
+    writer_response = call_llm(writer_model, messages, system_prompt)
+
+    if "[Error]" in writer_response:
+        return writer_response, {"dual": True, "error": "writer_failed"}
+
+    # 2단계: Auditor 리뷰
+    auditor_prompt = f"""당신은 {role} 작업의 Auditor(감사관)입니다.
+
+Writer가 작성한 다음 결과물을 검토하세요:
+
+=== WRITER 결과물 ===
+{writer_response}
+======================
+
+검토 기준:
+1. 논리적 오류/버그 확인
+2. 누락된 엣지케이스 확인
+3. 보안 취약점 확인
+4. 개선 제안
+
+출력 형식:
+```yaml
+verdict: "approve/revise/reject"
+issues:
+  - severity: "critical/high/medium/low"
+    description: "문제 설명"
+    fix: "수정 제안"
+improvements:
+  - "개선 사항 1"
+  - "개선 사항 2"
+final_comment: "최종 코멘트"
+```
+"""
+
+    auditor_messages = messages.copy()
+    auditor_messages.append({"role": "assistant", "content": writer_response})
+    auditor_messages.append({"role": "user", "content": auditor_prompt})
+
+    print(f"[Dual-V2] {role} Auditor ({auditor_model.name}) 리뷰 중...")
+    auditor_response = call_llm(auditor_model, auditor_messages, system_prompt)
+
+    # 결과 병합
+    merged_response = f"""## 📝 Writer ({writer_model.name})
+{writer_response}
+
+---
+
+## 🔍 Auditor ({auditor_model.name})
+{auditor_response}
+
+---
+✅ **듀얼 엔진 검토 완료** ({config['description']})
+"""
+
+    # 메타데이터
+    meta = {
+        "dual": True,
+        "writer_model": writer_model.name,
+        "auditor_model": auditor_model.name,
+        "role": role,
+        "description": config["description"],
+    }
+
+    # 로그
+    stream = get_stream()
+    stream.log_dual_engine(role, messages[-1]["content"], writer_response, auditor_response, merged_response)
+
+    return merged_response, meta
+
+
+# =============================================================================
+# 위원회 호출 (Council Integration)
+# =============================================================================
+
+async def call_council_llm(
+    system_prompt: str,
+    user_message: str,
+    temperature: float,
+    persona_id: str = None,
+    council_type: str = None
+) -> str:
+    """
+    위원회 페르소나용 LLM 호출
+
+    COUNCIL_MODEL_MAPPING에 따라 적절한 모델 선택
+    """
+    # 모델 선택 로직
+    model_key = "gpt_4o_mini"  # 기본값
+
+    if council_type and persona_id:
+        mapping = COUNCIL_MODEL_MAPPING.get(council_type, {})
+        personas = mapping.get("personas", {})
+        model_key = personas.get(persona_id, "gpt_4o_mini")
+
+    model_config = MODELS.get(model_key)
+    if not model_config:
+        model_config = MODELS["gpt_4o_mini"] if "gpt_4o_mini" in MODELS else list(MODELS.values())[0]
+
+    # temperature 오버라이드
+    original_temp = model_config.temperature
+    model_config.temperature = temperature
+
+    messages = [{"role": "user", "content": user_message}]
+    response = call_llm(model_config, messages, system_prompt)
+
+    # temperature 복원
+    model_config.temperature = original_temp
+
+    return response
+
+
+def init_council_with_llm():
+    """위원회에 LLM Caller 주입"""
+    from src.infra.council import get_council
+
+    council = get_council()
+
+    async def council_llm_caller(
+        system_prompt: str,
+        user_message: str,
+        temperature: float,
+        persona_id: str = None,
+        council_type: str = None
+    ) -> str:
+        """위원회 LLM 호출 (모델 매핑 지원)"""
+        # 모델 선택 로직
+        model_key = "gpt_4o_mini"  # 기본값
+
+        if council_type and persona_id:
+            mapping = COUNCIL_MODEL_MAPPING.get(council_type, {})
+            personas = mapping.get("personas", {})
+            model_key = personas.get(persona_id, "gpt_4o_mini")
+
+        model_config = MODELS.get(model_key)
+        if not model_config:
+            model_config = MODELS.get("gpt_4o_mini", list(MODELS.values())[0])
+
+        print(f"[Council] {persona_id} → {model_config.name}")
+
+        # 동기 호출을 비동기로 래핑
+        def sync_call():
+            # temperature 오버라이드
+            original_temp = model_config.temperature
+            model_config.temperature = temperature
+
+            messages = [{"role": "user", "content": user_message}]
+            response = call_llm(model_config, messages, system_prompt)
+
+            # temperature 복원
+            model_config.temperature = original_temp
+            return response
+
+        return await asyncio.get_event_loop().run_in_executor(None, sync_call)
+
+    council.set_llm_caller(council_llm_caller)
+    print("[Council] LLM Caller 주입 완료 (모델 매핑 활성화)")
+    return council
+
+
+def should_convene_council(agent_role: str, response: str, context: Dict = None) -> Optional[str]:
+    """
+    위원회 자동 소집 조건 판단
+
+    Returns:
+        위원회 유형 또는 None
+    """
+    context = context or {}
+
+    # 1. 전략 변경 감지
+    strategy_keywords = ["전략", "strategy", "방향", "decision", "결정", "plan"]
+    if agent_role == "strategist" or any(kw in response.lower() for kw in strategy_keywords):
+        if len(response) > 500:  # 긴 전략 응답
+            return "strategy"
+
+    # 2. 코드 패치 감지
+    code_keywords = ["```python", "```javascript", "```typescript", "def ", "class ", "function "]
+    if agent_role == "coder" or any(kw in response for kw in code_keywords):
+        if "def " in response or "class " in response:
+            return "code"
+
+    # 3. 보안 관련 감지
+    security_keywords = ["password", "api_key", "secret", "token", "auth", "보안", "취약점"]
+    if any(kw in response.lower() for kw in security_keywords):
+        return "security"
+
+    # 4. 배포 관련 감지
+    deploy_keywords = ["deploy", "배포", "production", "release", "push"]
+    if any(kw in response.lower() for kw in deploy_keywords):
+        return "deploy"
+
+    # 5. 듀얼 엔진 의견 불일치 감지 (Auditor가 reject 판정)
+    if "verdict: reject" in response.lower() or "verdict: revise" in response.lower():
+        if agent_role == "coder":
+            return "code"
+        elif agent_role == "strategist":
+            return "strategy"
+
+    return None
+
+
+async def convene_council_async(
+    council_type: str,
+    content: str,
+    context: str = ""
+) -> Dict:
+    """
+    비동기 위원회 소집
+
+    Returns:
+        판정 결과 딕셔너리
+    """
+    from src.infra.council import get_council, Verdict
+
+    council = get_council()
+
+    # LLM Caller가 설정되지 않았으면 초기화
+    if council.llm_caller is None:
+        init_council_with_llm()
+
+    print(f"[Council] {council_type.upper()} 위원회 소집 중...")
+    verdict = await council.convene(council_type, content, context)
+
+    result = {
+        "council_type": council_type,
+        "verdict": verdict.verdict.value,
+        "average_score": verdict.average_score,
+        "score_std": verdict.score_std,
+        "requires_ceo": verdict.requires_ceo,
+        "summary": verdict.summary,
+        "judges": [
+            {
+                "persona": j.persona_name,
+                "icon": j.icon,
+                "score": j.score,
+                "reasoning": j.reasoning,
+            }
+            for j in verdict.judges
+        ]
+    }
+
+    print(f"[Council] 판정: {verdict.verdict.value} (평균 {verdict.average_score}/10)")
+    return result
+
+
+def convene_council_sync(council_type: str, content: str, context: str = "") -> Dict:
+    """동기 버전 위원회 소집"""
+    return asyncio.run(convene_council_async(council_type, content, context))
+
+
+# =============================================================================
+# 루프 브레이커 (Loop Breaker)
+# =============================================================================
+
+class LoopBreaker:
+    """
+    에이전트 루프 감지 및 차단
+
+    - MAX_STAGE_RETRY: 같은 단계 최대 재시도
+    - MAX_TOTAL_STEPS: 전체 최대 단계
+    - 반복 응답 감지 (유사도 기반)
+    - CEO 에스컬레이션
+    """
+
+    def __init__(self):
+        self.step_count = 0
+        self.stage_retries: Dict[str, int] = {}
+        self.response_history: list = []
+        self.is_broken = False
+        self.break_reason = None
+
+    def reset(self):
+        """브레이커 초기화"""
+        self.step_count = 0
+        self.stage_retries = {}
+        self.response_history = []
+        self.is_broken = False
+        self.break_reason = None
+
+    def _calculate_similarity(self, text1: str, text2: str) -> float:
+        """두 텍스트의 유사도 계산 (간단한 Jaccard)"""
+        if not text1 or not text2:
+            return 0.0
+
+        words1 = set(text1.lower().split())
+        words2 = set(text2.lower().split())
+
+        if not words1 or not words2:
+            return 0.0
+
+        intersection = words1 & words2
+        union = words1 | words2
+
+        return len(intersection) / len(union)
+
+    def check_and_update(self, stage: str, response: str) -> Tuple[bool, Optional[str]]:
+        """
+        루프 체크 및 상태 업데이트
+
+        Args:
+            stage: 현재 단계 (예: "coder", "qa", "strategist")
+            response: 에이전트 응답
+
+        Returns:
+            (should_break, break_reason): 중단해야 하면 True와 사유
+        """
+        config = LOOP_BREAKER_CONFIG
+
+        # 1. 전체 단계 수 체크
+        self.step_count += 1
+        if self.step_count > config["MAX_TOTAL_STEPS"]:
+            self.is_broken = True
+            self.break_reason = f"MAX_TOTAL_STEPS 초과 ({self.step_count}/{config['MAX_TOTAL_STEPS']})"
+            return True, self.break_reason
+
+        # 2. 같은 단계 재시도 체크
+        self.stage_retries[stage] = self.stage_retries.get(stage, 0) + 1
+        if self.stage_retries[stage] > config["MAX_STAGE_RETRY"]:
+            self.is_broken = True
+            self.break_reason = f"MAX_STAGE_RETRY 초과: {stage} ({self.stage_retries[stage]}회)"
+            return True, self.break_reason
+
+        # 3. 반복 응답 감지
+        for prev_response in self.response_history[-3:]:  # 최근 3개와 비교
+            similarity = self._calculate_similarity(response, prev_response)
+            if similarity > config["SIMILARITY_THRESHOLD"]:
+                self.is_broken = True
+                self.break_reason = f"반복 응답 감지 (유사도: {similarity:.2%})"
+                return True, self.break_reason
+
+        # 4. 응답 히스토리 저장
+        self.response_history.append(response[:1000])  # 처음 1000자만
+
+        return False, None
+
+    def get_escalation_message(self) -> str:
+        """CEO 에스컬레이션 메시지 생성"""
+        return f"""
+⚠️ **루프 브레이커 발동**
+
+**사유**: {self.break_reason}
+**진행 단계**: {self.step_count}회
+**단계별 재시도**: {dict(self.stage_retries)}
+
+---
+
+**권장 조치**:
+1. 현재 작업을 수동으로 검토하세요
+2. 요청을 더 명확하게 재정의하세요
+3. 작업 범위를 축소하세요
+
+**자동 조치**: 루프가 중단되었습니다.
+"""
+
+    def should_escalate_to_ceo(self) -> bool:
+        """CEO 에스컬레이션 필요 여부"""
+        return self.is_broken and LOOP_BREAKER_CONFIG.get("ESCALATE_TO_CEO", True)
+
+
+# 싱글톤 인스턴스
+_loop_breaker: Optional[LoopBreaker] = None
+
+
+def get_loop_breaker() -> LoopBreaker:
+    """LoopBreaker 싱글톤"""
+    global _loop_breaker
+    if _loop_breaker is None:
+        _loop_breaker = LoopBreaker()
+    return _loop_breaker
+
+
+def check_loop(stage: str, response: str) -> Tuple[bool, Optional[str]]:
+    """루프 체크 헬퍼 함수"""
+    return get_loop_breaker().check_and_update(stage, response)
+
+
+# =============================================================================
 # Agent Call
 # =============================================================================
 
@@ -229,7 +739,9 @@ def call_agent(
     auto_execute: bool = True,
     use_translation: bool = True,
     use_router: bool = True,
-    return_meta: bool = False
+    return_meta: bool = False,
+    use_dual_engine: bool = True,   # 듀얼 엔진 사용 여부
+    auto_council: bool = True,      # 위원회 자동 소집 여부
 ) -> str | tuple[str, dict]:
     """
     실제 LLM 호출 + [EXEC] 태그 자동 실행 + RAG 컨텍스트 주입 + 번역 + 스코어카드 로깅
@@ -309,13 +821,81 @@ def call_agent(
 
     messages.append({"role": "user", "content": agent_message})
 
-    if use_router:
+    # 듀얼 엔진 메타데이터
+    dual_meta = {"dual": False}
+    council_result = None
+
+    # =========================================================================
+    # 듀얼 엔진 V2 사용 (use_dual_engine=True이고 역할이 지원되는 경우)
+    # =========================================================================
+    if use_dual_engine and agent_role in DUAL_ENGINE_ROLES and not used_prefix:
+        print(f"[Dual-V2] {agent_role} 듀얼 엔진 모드 활성화")
+        response, dual_meta = call_dual_engine_v2(agent_role, messages, system_prompt)
+
+        # 위원회 자동 소집 체크
+        if auto_council:
+            council_type = should_convene_council(agent_role, response)
+            if council_type:
+                print(f"[Council] 자동 소집 트리거: {council_type}")
+                try:
+                    council_result = convene_council_sync(council_type, response, agent_message)
+                    model_meta['council'] = council_result
+
+                    # 위원회 결과를 응답에 추가
+                    response += f"""
+
+---
+
+## 🏛️ {council_type.upper()} 위원회 판정
+
+{council_result['summary']}
+
+**상세 점수:**
+"""
+                    for judge in council_result['judges']:
+                        response += f"- {judge['icon']} {judge['persona']}: {judge['score']}/10 - {judge['reasoning'][:100]}...\n"
+
+                except Exception as e:
+                    print(f"[Council] 소집 실패: {e}")
+
+        stream = get_stream()
+        stream.log("ceo", agent_role, "request", agent_message)
+        stream.log(agent_role, "ceo", "response", response)
+
+    # =========================================================================
+    # 기존 라우터 모드 (CEO 프리픽스 사용 또는 듀얼 비활성화)
+    # =========================================================================
+    elif use_router:
         response = router.call_model(routing, messages, system_prompt)
         print(f"[Router] Called: {routing.model_spec.name}")
 
         stream = get_stream()
         stream.log("ceo", agent_role, "request", agent_message)
         stream.log(agent_role, "ceo", "response", response)
+
+        # 라우터 모드에서도 위원회 자동 소집 체크
+        if auto_council:
+            council_type = should_convene_council(agent_role, response)
+            if council_type:
+                print(f"[Council] 자동 소집 트리거: {council_type}")
+                try:
+                    council_result = convene_council_sync(council_type, response, agent_message)
+                    model_meta['council'] = council_result
+
+                    response += f"""
+
+---
+
+## 🏛️ {council_type.upper()} 위원회 판정
+
+{council_result['summary']}
+"""
+                except Exception as e:
+                    print(f"[Council] 소집 실패: {e}")
+
+    # =========================================================================
+    # 레거시 모드 (use_router=False)
+    # =========================================================================
     else:
         if agent_role in DUAL_ENGINES:
             response = call_dual_engine(agent_role, messages, system_prompt)
@@ -328,6 +908,9 @@ def call_agent(
                 stream.log(agent_role, "ceo", "response", response)
             else:
                 return f"[Error] No engine configured for: {agent_role}"
+
+    # 듀얼 엔진 메타 정보 병합
+    model_meta['dual_engine'] = dual_meta
 
     if auto_execute and agent_role in ["coder", "pm"]:
         exec_results = executor.execute_all(response)
@@ -415,18 +998,59 @@ def call_agent(
     return response
 
 
-def process_call_tags(pm_response: str) -> list:
-    """PM 응답에서 [CALL:agent] 태그를 처리"""
+def process_call_tags(pm_response: str, use_loop_breaker: bool = True) -> list:
+    """
+    PM 응답에서 [CALL:agent] 태그를 처리
+
+    Args:
+        pm_response: PM 응답 텍스트
+        use_loop_breaker: 루프 브레이커 사용 여부
+
+    Returns:
+        에이전트 호출 결과 리스트
+    """
     calls = executor.extract_call_info(pm_response)
     results = []
+
+    # 루프 브레이커 초기화 (새 태스크 시작)
+    if use_loop_breaker:
+        loop_breaker = get_loop_breaker()
+        # 새 PM 호출이면 리셋하지 않음 (연속 작업 추적)
 
     for call in calls:
         agent = call['agent']
         message = call['message']
 
+        # 루프 브레이커 체크
+        if use_loop_breaker:
+            should_break, break_reason = check_loop(agent, message)
+            if should_break:
+                print(f"[LoopBreaker] 🛑 루프 감지: {break_reason}")
+                escalation_msg = get_loop_breaker().get_escalation_message()
+
+                results.append({
+                    'agent': 'loop_breaker',
+                    'message': break_reason,
+                    'response': escalation_msg,
+                    'is_break': True
+                })
+
+                # CEO 에스컬레이션
+                if get_loop_breaker().should_escalate_to_ceo():
+                    print("[LoopBreaker] ⚠️ CEO 에스컬레이션 필요")
+
+                break  # 더 이상 에이전트 호출하지 않음
+
         print(f"[CALL] PM → {agent}: {message[:100]}...")
 
         response = call_agent(message, agent, auto_execute=True, use_translation=False)
+
+        # 응답 기반 루프 체크
+        if use_loop_breaker:
+            should_break, break_reason = check_loop(f"{agent}_response", response)
+            if should_break:
+                print(f"[LoopBreaker] 🛑 반복 응답 감지: {break_reason}")
+                response += f"\n\n---\n\n⚠️ **루프 브레이커 경고**: {break_reason}"
 
         results.append({
             'agent': agent,
