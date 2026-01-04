@@ -19,21 +19,26 @@ services:
     environment:
       - FLASK_ENV=production
       - FLASK_SECRET_KEY=${FLASK_SECRET_KEY:-hattz-empire-docker-secret}
-      # LLM API Keys (호스트 환경변수에서 가져옴)
+      # LLM API Keys (호스트 .env에서 가져옴)
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY}
-      # Database
-      - DB_SERVER=${DB_SERVER:-host.docker.internal}
-      - DB_PORT=${DB_PORT:-1433}
-      - DB_NAME=${DB_NAME:-hattz_empire}
-      - DB_USER=${DB_USER}
-      - DB_PASSWORD=${DB_PASSWORD}
+      - PERPLEXITY_API_KEY=${PERPLEXITY_API_KEY}
+      # MSSQL Database (host.docker.internal = 호스트 머신)
+      - MSSQL_SERVER=${MSSQL_SERVER:-host.docker.internal}
+      - MSSQL_DATABASE=${MSSQL_DATABASE}
+      - MSSQL_USER=${MSSQL_USER}
+      - MSSQL_PASSWORD=${MSSQL_PASSWORD}
+      - ODBC_DRIVER=ODBC Driver 18 for SQL Server
     volumes:
+      # .env 파일 (API 키)
+      - ./.env:/app/.env:ro
       # 프로젝트 컨텍스트 (읽기 전용)
       - ./projects:/app/projects:ro
       # 로그
       - ./logs:/app/logs
+      # 대화 스트림 로그
+      - ./src/infra/conversations:/app/src/infra/conversations
     networks:
       - hattz-network
     restart: unless-stopped

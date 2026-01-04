@@ -558,9 +558,11 @@ CALLABLE_AGENTS = {
     "coder": "코드 작성 전문가",
     "qa": "품질 검증 전문가",
     "qa_logic": "로직 검증 전문가",
+    "qa_security": "보안 검증 전문가",
     "researcher": "리서치 전문가",
     "strategist": "전략 분석 전문가",
     "analyst": "데이터 분석 전문가",
+    "documentor": "문서화 전문가",
 }
 
 

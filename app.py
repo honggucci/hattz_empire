@@ -76,4 +76,5 @@ if __name__ == '__main__':
     print("="*60)
     print("http://localhost:5000")
     print("="*60 + "\n")
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    # threaded=True: 모니터/헬스체크가 LLM 호출 중에도 응답 가능
+    app.run(debug=True, host='0.0.0.0', port=5000, threaded=True)
