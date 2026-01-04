@@ -9,8 +9,11 @@
 </head>
 <body>
     <div class="container">
+        <!-- Mobile Sidebar Overlay -->
+        <div class="sidebar-overlay" id="sidebar-overlay"></div>
+
         <!-- Sidebar -->
-        <aside class="sidebar">
+        <aside class="sidebar" id="sidebar">
             <div class="project-selector">
                 <h3>Project</h3>
                 <select id="project-select">
@@ -47,6 +50,12 @@
         <main class="chat-main">
             <div class="chat-header">
                 <div class="header-left">
+                    <!-- Mobile Menu Button -->
+                    <button class="mobile-menu-btn" id="mobile-menu-btn" aria-label="메뉴">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+                            <path d="M3 12h18M3 6h18M3 18h18"/>
+                        </svg>
+                    </button>
                     <a href="/" class="logo-mini">HATTZ</a>
                     <span class="header-sep">|</span>
                     <span id="current-agent">PM</span>

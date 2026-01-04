@@ -1656,3 +1656,41 @@ projectSelect.addEventListener('change', async (e) => {
 document.addEventListener('DOMContentLoaded', () => {
     setTimeout(updateProjectStatus, 500);  // 프로젝트 로드 후 실행
 });
+
+// ========================================
+// Mobile Sidebar Toggle
+// ========================================
+const mobileMenuBtn = document.getElementById('mobile-menu-btn');
+const sidebar = document.getElementById('sidebar');
+const sidebarOverlay = document.getElementById('sidebar-overlay');
+
+function openMobileSidebar() {
+    if (sidebar && sidebarOverlay) {
+        sidebar.classList.add('open');
+        sidebarOverlay.classList.add('active');
+        document.body.style.overflow = 'hidden';  // 배경 스크롤 방지
+    }
+}
+
+function closeMobileSidebar() {
+    if (sidebar && sidebarOverlay) {
+        sidebar.classList.remove('open');
+        sidebarOverlay.classList.remove('active');
+        document.body.style.overflow = '';
+    }
+}
+
+if (mobileMenuBtn) {
+    mobileMenuBtn.addEventListener('click', openMobileSidebar);
+}
+
+if (sidebarOverlay) {
+    sidebarOverlay.addEventListener('click', closeMobileSidebar);
+}
+
+// 세션 선택 시 모바일에서 사이드바 닫기
+const originalSwitchSession = switchSession;
+switchSession = async function(sessionId) {
+    await originalSwitchSession(sessionId);
+    closeMobileSidebar();
+};
