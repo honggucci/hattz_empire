@@ -30,6 +30,20 @@ ALLOWED_COMMANDS = {
     "ls", "dir", "cat", "type", "echo", "cd", "pwd",
 }
 
+# =============================================================================
+# WPCN Configuration
+# =============================================================================
+WPCN_BASE_PATH = "C:/Users/hahonggu/Desktop/coin_master/projects/wpcn-backtester-cli-noflask"
+
+# WPCN 지원 명령어
+WPCN_COMMANDS = {
+    "backtest": "현물 백테스트 실행",
+    "futures": "선물 백테스트 실행",
+    "optimize": "파라미터 최적화 (Walk-Forward)",
+    "status": "최적화 상태 확인",
+    "symbols": "지원 심볼 목록",
+}
+
 # 금지된 패턴 (보안 위험)
 BLOCKED_PATTERNS = [
     r"rm\s+-rf",
@@ -255,6 +269,242 @@ def run_command(command: str, cwd: Optional[str] = None) -> ExecutionResult:
         )
 
 
+# =============================================================================
+# WPCN Executor Functions
+# =============================================================================
+
+def run_wpcn_backtest(symbol: str = "BTC-USDT", timeframe: str = "15m", days: int = 90) -> ExecutionResult:
+    """
+    WPCN 현물 백테스트 실행
+
+    Args:
+        symbol: 거래 심볼 (예: BTC-USDT, ETH-USDT)
+        timeframe: 타임프레임 (예: 15m, 1h)
+        days: 백테스트 기간 (일)
+    """
+    try:
+        wpcn_path = WPCN_BASE_PATH.replace('/', '\\')
+        num_files = days // 30 + 1
+
+        script = f'''
+import sys
+sys.path.insert(0, r"{wpcn_path}")
+import pandas as pd
+from pathlib import Path
+import warnings
+warnings.filterwarnings("ignore")
+
+from wpcn._03_common._01_core.types import Theta, BacktestCosts, BacktestConfig
+from wpcn._04_execution.broker_sim_mtf import simulate_mtf
+
+# 데이터 로드
+data_path = Path(r"{wpcn_path}/data/bronze/binance/futures/{symbol}/{timeframe}")
+if not data_path.exists():
+    print(f"ERROR: Data not found at {{data_path}}")
+    exit(1)
+
+files = sorted(data_path.rglob("*.parquet"))[-{num_files}:]
+dfs = [pd.read_parquet(f) for f in files]
+df = pd.concat(dfs, ignore_index=True)
+df = df.sort_values("timestamp").drop_duplicates("timestamp").set_index("timestamp")
+
+# 설정
+theta = Theta(pivot_lr=3, box_L=50, m_freeze=16, atr_len=14, x_atr=2.0, m_bw=0.02, N_reclaim=8, N_fill=5, F_min=0.3)
+costs = BacktestCosts(fee_bps=7.5, slippage_bps=5.0)
+cfg = BacktestConfig(initial_equity=10000.0, max_hold_bars=288, conf_min=0.3)
+
+# 백테스트
+equity_df, trades_df, signals_df, nav_df = simulate_mtf(
+    df=df, theta=theta, costs=costs, cfg=cfg,
+    mtf=["15m", "1h", "4h"], spot_mode=True,
+    min_score=3.5, min_tf_alignment=2, min_rr_ratio=1.2
+)
+
+# 결과
+if len(trades_df) > 0:
+    final_eq = equity_df["equity"].iloc[-1]
+    ret = (final_eq - 10000) / 10000 * 100
+    mdd = ((equity_df["equity"].cummax() - equity_df["equity"]) / equity_df["equity"].cummax()).max() * 100
+    entry_cnt = len(trades_df[trades_df["type"] == "ENTRY"])
+    exit_trades = trades_df[trades_df["type"].isin(["TP1", "TP2", "STOP", "TIME_EXIT"])]
+    win_rate = len(exit_trades[exit_trades["pnl_pct"] > 0]) / len(exit_trades) * 100 if len(exit_trades) > 0 else 0
+    print(f"=== {symbol} 백테스트 결과 ===")
+    print(f"기간: {{df.index.min()}} ~ {{df.index.max()}}")
+    print(f"캔들 수: {{len(df):,}}")
+    print(f"수익률: {{ret:.2f}}%")
+    print(f"MDD: {{mdd:.2f}}%")
+    print(f"진입: {{entry_cnt}}회")
+    print(f"승률: {{win_rate:.1f}}%")
+else:
+    print("거래 없음 (신호 조건 미충족)")
+'''
+
+        result = subprocess.run(
+            ["python", "-c", script],
+            capture_output=True,
+            text=True,
+            timeout=300,  # 5분 타임아웃
+            cwd=wpcn_path
+        )
+
+        return ExecutionResult(
+            success=result.returncode == 0,
+            output=result.stdout + (f"\n[STDERR]\n{result.stderr}" if result.stderr else ""),
+            error=result.stderr if result.returncode != 0 else None,
+            action="wpcn:backtest",
+            target=f"{symbol} {timeframe} {days}d"
+        )
+    except subprocess.TimeoutExpired:
+        return ExecutionResult(
+            success=False, output="", error="Backtest timed out (5min limit)",
+            action="wpcn:backtest", target=f"{symbol} {timeframe}"
+        )
+    except Exception as e:
+        return ExecutionResult(
+            success=False, output="", error=str(e),
+            action="wpcn:backtest", target=f"{symbol} {timeframe}"
+        )
+
+
+def run_wpcn_optimize(symbol: str = "BTC-USDT", timeframe: str = "15m", optimizer: str = "optuna") -> ExecutionResult:
+    """
+    WPCN 파라미터 최적화 실행
+
+    Args:
+        symbol: 거래 심볼
+        timeframe: 타임프레임
+        optimizer: 최적화 방식 (random, optuna, bayesian, grid)
+    """
+    try:
+        wpcn_path = WPCN_BASE_PATH.replace('/', '\\')
+
+        result = subprocess.run(
+            ["python", "-m", "wpcn._08_tuning.run_tuning",
+             "--symbol", symbol, "--timeframe", timeframe, "--optimizer", optimizer],
+            capture_output=True,
+            text=True,
+            timeout=1800,  # 30분 타임아웃
+            cwd=wpcn_path
+        )
+
+        return ExecutionResult(
+            success=result.returncode == 0,
+            output=result.stdout + (f"\n[STDERR]\n{result.stderr}" if result.stderr else ""),
+            error=result.stderr if result.returncode != 0 else None,
+            action="wpcn:optimize",
+            target=f"{symbol} {timeframe} ({optimizer})"
+        )
+    except subprocess.TimeoutExpired:
+        return ExecutionResult(
+            success=False, output="", error="Optimization timed out (30min limit)",
+            action="wpcn:optimize", target=f"{symbol} {timeframe}"
+        )
+    except Exception as e:
+        return ExecutionResult(
+            success=False, output="", error=str(e),
+            action="wpcn:optimize", target=f"{symbol} {timeframe}"
+        )
+
+
+def run_wpcn_status() -> ExecutionResult:
+    """WPCN 시스템 상태 확인"""
+    try:
+        script = '''
+import sys
+sys.path.insert(0, r"{wpcn_path}")
+from wpcn._08_tuning import get_optuna_status, HAS_OPTUNA
+from pathlib import Path
+import os
+
+print("=== WPCN 시스템 상태 ===")
+print(f"Optuna 설치: {{HAS_OPTUNA}}")
+status = get_optuna_status()
+print(f"Optuna 버전: {{status.get('optuna_version', 'N/A')}}")
+
+data_path = Path(r"{wpcn_path}/data/bronze/binance/futures")
+if data_path.exists():
+    symbols = [d.name for d in data_path.iterdir() if d.is_dir()]
+    print(f"\\n사용 가능한 심볼: {{len(symbols)}}개")
+    for s in symbols[:5]:
+        print(f"  - {{s}}")
+    if len(symbols) > 5:
+        print(f"  ... 외 {{len(symbols) - 5}}개")
+else:
+    print("데이터 폴더 없음")
+
+results_path = Path(r"{wpcn_path}/results")
+if results_path.exists():
+    results = sorted(results_path.glob("*.json"), key=os.path.getmtime, reverse=True)[:3]
+    if results:
+        print(f"\\n최근 최적화 결과:")
+        for r in results:
+            print(f"  - {{r.name}}")
+'''.format(wpcn_path=WPCN_BASE_PATH.replace('/', '\\\\'))
+
+        result = subprocess.run(
+            ["python", "-c", script],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            cwd=WPCN_BASE_PATH
+        )
+
+        return ExecutionResult(
+            success=result.returncode == 0,
+            output=result.stdout,
+            error=result.stderr if result.returncode != 0 else None,
+            action="wpcn:status",
+            target="system"
+        )
+    except Exception as e:
+        return ExecutionResult(
+            success=False, output="", error=str(e),
+            action="wpcn:status", target="system"
+        )
+
+
+def run_wpcn_symbols() -> ExecutionResult:
+    """WPCN 지원 심볼 목록"""
+    try:
+        script = '''
+from pathlib import Path
+
+data_path = Path(r"{wpcn_path}/data/bronze/binance/futures")
+if data_path.exists():
+    symbols = sorted([d.name for d in data_path.iterdir() if d.is_dir()])
+    print("=== 지원 심볼 목록 ===")
+    for s in symbols:
+        sym_path = data_path / s / "15m"
+        if sym_path.exists():
+            files = list(sym_path.rglob("*.parquet"))
+            if files:
+                print(f"{{s}}: {{len(files)}}개 파일")
+else:
+    print("데이터 폴더 없음")
+'''.format(wpcn_path=WPCN_BASE_PATH.replace('/', '\\\\'))
+
+        result = subprocess.run(
+            ["python", "-c", script],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            cwd=WPCN_BASE_PATH
+        )
+
+        return ExecutionResult(
+            success=result.returncode == 0,
+            output=result.stdout,
+            error=result.stderr if result.returncode != 0 else None,
+            action="wpcn:symbols",
+            target="list"
+        )
+    except Exception as e:
+        return ExecutionResult(
+            success=False, output="", error=str(e),
+            action="wpcn:symbols", target="list"
+        )
+
+
 def list_files(directory: str, pattern: str = "*") -> ExecutionResult:
     """디렉토리 파일 목록"""
     try:
@@ -357,12 +607,82 @@ def execute_command(cmd: Dict[str, Any]) -> ExecutionResult:
         return run_command(target)
     elif action == "list":
         return list_files(target)
+    # =============================================================================
+    # WPCN Commands: [EXEC:wpcn:command:args]
+    # =============================================================================
+    elif action == "wpcn":
+        return execute_wpcn_command(target, content)
     else:
         return ExecutionResult(
             success=False,
             output="",
             error=f"Unknown action: {action}",
             action=action,
+            target=target
+        )
+
+
+def execute_wpcn_command(target: str, content: str = "") -> ExecutionResult:
+    """
+    WPCN 명령어 실행
+
+    지원 형식:
+    - [EXEC:wpcn:backtest:BTC-USDT:15m:90]  # 백테스트
+    - [EXEC:wpcn:optimize:BTC-USDT:15m:optuna]  # 최적화
+    - [EXEC:wpcn:status]  # 상태 확인
+    - [EXEC:wpcn:symbols]  # 심볼 목록
+    """
+    parts = target.split(":")
+    command = parts[0].lower() if parts else ""
+
+    if command == "backtest":
+        symbol = parts[1] if len(parts) > 1 else "BTC-USDT"
+        timeframe = parts[2] if len(parts) > 2 else "15m"
+        days = int(parts[3]) if len(parts) > 3 else 90
+        return run_wpcn_backtest(symbol, timeframe, days)
+
+    elif command == "optimize":
+        symbol = parts[1] if len(parts) > 1 else "BTC-USDT"
+        timeframe = parts[2] if len(parts) > 2 else "15m"
+        optimizer = parts[3] if len(parts) > 3 else "optuna"
+        return run_wpcn_optimize(symbol, timeframe, optimizer)
+
+    elif command == "status":
+        return run_wpcn_status()
+
+    elif command == "symbols":
+        return run_wpcn_symbols()
+
+    elif command == "help":
+        help_text = """=== WPCN 명령어 도움말 ===
+
+[EXEC:wpcn:backtest:심볼:타임프레임:일수]
+  예: [EXEC:wpcn:backtest:BTC-USDT:15m:90]
+  현물 백테스트 실행
+
+[EXEC:wpcn:optimize:심볼:타임프레임:옵티마이저]
+  예: [EXEC:wpcn:optimize:BTC-USDT:15m:optuna]
+  옵티마이저: random, optuna, bayesian, grid
+
+[EXEC:wpcn:status]
+  시스템 상태 확인
+
+[EXEC:wpcn:symbols]
+  지원 심볼 목록
+"""
+        return ExecutionResult(
+            success=True,
+            output=help_text,
+            action="wpcn:help",
+            target="help"
+        )
+
+    else:
+        return ExecutionResult(
+            success=False,
+            output="",
+            error=f"Unknown WPCN command: {command}. Use [EXEC:wpcn:help] for available commands.",
+            action="wpcn",
             target=target
         )
 

@@ -1420,8 +1420,8 @@ function completeStreamingInWidget(taskId) {
         stage: 'completed',
         progress: 100
     });
-    // 위젯 자동 제거 안 함 - 사용자가 직접 닫거나 다음 요청 시까지 유지
-    // setTimeout(() => removeWidgetTask(taskId), 2000);
+    // 15초 후 자동으로 위젯 제거
+    setTimeout(() => removeWidgetTask(taskId), 15000);
 }
 
 

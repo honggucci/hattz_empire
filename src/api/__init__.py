@@ -23,6 +23,7 @@ monitor_bp = Blueprint('monitor', __name__, url_prefix='/api/monitor')
 def register_blueprints(app):
     """모든 Blueprint를 앱에 등록"""
     from . import auth, chat, sessions, execute, rag_api, scores, router_api, tasks, breaker, council_api, health, costs, monitor
+    from .wpcn import wpcn_bp  # WPCN API
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(chat_bp)
@@ -37,3 +38,4 @@ def register_blueprints(app):
     app.register_blueprint(health_bp)
     app.register_blueprint(cost_bp)
     app.register_blueprint(monitor_bp)
+    app.register_blueprint(wpcn_bp)  # WPCN API

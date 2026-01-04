@@ -495,5 +495,111 @@ def get_unshown_completed_tasks(session_id: str) -> list:
     return []
 
 
+# =============================================================================
+# WPCN Background Workers
+# =============================================================================
+
+def wpcn_backtest_worker(
+    message: str,
+    agent_role: str,
+    progress_callback: Callable[[int, str], None]
+) -> str:
+    """
+    WPCN 백테스트 백그라운드 워커
+
+    Args:
+        message: "BTC-USDT:15m:90" 형식
+        agent_role: 에이전트 역할
+        progress_callback: 진행률 콜백
+
+    Returns:
+        백테스트 결과 문자열
+    """
+    from .executor import run_wpcn_backtest
+
+    parts = message.split(":")
+    symbol = parts[0] if len(parts) > 0 else "BTC-USDT"
+    timeframe = parts[1] if len(parts) > 1 else "15m"
+    days = int(parts[2]) if len(parts) > 2 else 90
+
+    progress_callback(10, "데이터 로드 중...")
+    time.sleep(0.5)
+
+    progress_callback(30, "백테스트 실행 중...")
+    result = run_wpcn_backtest(symbol, timeframe, days)
+
+    progress_callback(90, "결과 정리 중...")
+    time.sleep(0.3)
+
+    if result.success:
+        return result.output
+    else:
+        raise Exception(result.error or "백테스트 실패")
+
+
+def wpcn_optimize_worker(
+    message: str,
+    agent_role: str,
+    progress_callback: Callable[[int, str], None]
+) -> str:
+    """
+    WPCN 파라미터 최적화 백그라운드 워커
+
+    Args:
+        message: "BTC-USDT:15m:optuna" 형식
+        agent_role: 에이전트 역할
+        progress_callback: 진행률 콜백
+
+    Returns:
+        최적화 결과 문자열
+    """
+    from .executor import run_wpcn_optimize
+
+    parts = message.split(":")
+    symbol = parts[0] if len(parts) > 0 else "BTC-USDT"
+    timeframe = parts[1] if len(parts) > 1 else "15m"
+    optimizer = parts[2] if len(parts) > 2 else "optuna"
+
+    progress_callback(5, "최적화 준비 중...")
+    time.sleep(0.5)
+
+    progress_callback(10, f"{optimizer} 최적화 시작...")
+    result = run_wpcn_optimize(symbol, timeframe, optimizer)
+
+    progress_callback(95, "결과 저장 중...")
+    time.sleep(0.3)
+
+    if result.success:
+        return result.output
+    else:
+        raise Exception(result.error or "최적화 실패")
+
+
+def start_wpcn_backtest(session_id: str, symbol: str, timeframe: str, days: int = 90) -> str:
+    """
+    WPCN 백테스트를 백그라운드로 시작
+
+    Returns:
+        task_id
+    """
+    message = f"{symbol}:{timeframe}:{days}"
+    task_id = create_task(session_id, "wpcn_backtest", message)
+    start_task(task_id, wpcn_backtest_worker)
+    return task_id
+
+
+def start_wpcn_optimize(session_id: str, symbol: str, timeframe: str, optimizer: str = "optuna") -> str:
+    """
+    WPCN 최적화를 백그라운드로 시작
+
+    Returns:
+        task_id
+    """
+    message = f"{symbol}:{timeframe}:{optimizer}"
+    task_id = create_task(session_id, "wpcn_optimize", message)
+    start_task(task_id, wpcn_optimize_worker)
+    return task_id
+
+
 # 테이블 생성 (모듈 로드 시)
 create_background_tasks_table()
