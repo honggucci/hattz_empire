@@ -21,9 +21,7 @@ def get_connection_string() -> str:
     database = os.getenv("MSSQL_DATABASE")
     user = os.getenv("MSSQL_USER")
     password = os.getenv("MSSQL_PASSWORD")
-    # Docker: ODBC Driver 18, Windows: ODBC Driver 17
-    driver = os.getenv("ODBC_DRIVER", "ODBC Driver 17 for SQL Server")
-    return f"DRIVER={{{driver}}};SERVER={server};DATABASE={database};UID={user};PWD={password}"
+    return f"DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server};DATABASE={database};UID={user};PWD={password}"
 
 
 @contextmanager

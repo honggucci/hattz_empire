@@ -874,31 +874,19 @@ async function loadCurrentSession() {
                 console.log('[DEBUG] Session not found, clearing localStorage');
                 localStorage.removeItem('hattz_session_id');
                 currentSessionId = null;
-                showWelcomeMessage();
                 return;
             }
 
             const data = await response.json();
-            console.log('[DEBUG] Switch response - session:', data.session?.id, 'messages:', data.messages?.length || 0);
 
             if (data.session) {
                 console.log('[DEBUG] Loaded session:', data.session.id);
-
-                // 세션의 프로젝트 정보가 있으면 자동 선택
-                if (data.session.project && projectSelect) {
-                    projectSelect.value = data.session.project;
-                    currentProject = data.session.project;
-                    console.log('[DEBUG] Auto-selected project:', data.session.project);
-                }
 
                 if (data.messages && data.messages.length > 0) {
                     chatMessages.innerHTML = '';
                     data.messages.forEach(msg => {
                         appendMessage(msg.role, msg.content, msg.agent || data.session.agent);
                     });
-                    console.log('[DEBUG] Rendered', data.messages.length, 'messages');
-                } else {
-                    showWelcomeMessage();
                 }
 
                 // Update session list to highlight active session
@@ -908,11 +896,9 @@ async function loadCurrentSession() {
             console.error('[DEBUG] Failed to load session:', error);
             localStorage.removeItem('hattz_session_id');
             currentSessionId = null;
-            showWelcomeMessage();
         }
     } else {
         console.log('[DEBUG] No session ID in localStorage, showing welcome');
-        showWelcomeMessage();
     }
 }
 
@@ -1434,8 +1420,8 @@ function completeStreamingInWidget(taskId) {
         stage: 'completed',
         progress: 100
     });
-    // 2초 후 위젯 자동 제거
-    setTimeout(() => removeWidgetTask(taskId), 2000);
+    // 위젯 자동 제거 안 함 - 사용자가 직접 닫거나 다음 요청 시까지 유지
+    // setTimeout(() => removeWidgetTask(taskId), 2000);
 }
 
 
