@@ -1146,12 +1146,17 @@ PROJECTS = {
     "youtube_ar": {
         "name": "YouTube Video AR",
         "description": "YouTube 영상 AR 프로젝트",
-        "path": "C:/Users/hahonggu/Desktop/coin_master/projects/yotuube_video_ar",
+        "path": "C:/Users/hahonggu/Desktop/coin_master/projects/youtube_ar",
     },
     "hattz_empire": {
         "name": "Hattz Empire",
         "description": "AI Orchestration System - 멀티 AI 팀 협업 시스템",
         "path": "C:/Users/hahonggu/Desktop/coin_master/hattz_empire",
+    },
+    "test": {
+        "name": "Test",
+        "description": "테스트 프로젝트",
+        "path": "C:/Users/hahonggu/Desktop/coin_master/projects/test",
     },
 }
 
