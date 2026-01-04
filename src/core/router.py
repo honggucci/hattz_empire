@@ -504,8 +504,21 @@ class HattzRouter:
             "Content-Type": "application/json"
         }
 
-        full_messages = [{"role": "system", "content": system_prompt}]
-        full_messages.extend(messages)
+        # Perplexity는 user/assistant 교대 필수
+        # 가장 단순하게: system + 마지막 user 메시지만 사용
+        last_user_msg = None
+        for msg in messages:
+            if msg["role"] == "user":
+                last_user_msg = msg
+
+        if last_user_msg:
+            full_messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": last_user_msg["content"]}
+            ]
+        else:
+            # user 메시지가 없으면 에러
+            return "[Error] No user message found for Perplexity"
 
         payload = {
             "model": spec.model_id,

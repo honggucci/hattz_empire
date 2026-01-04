@@ -166,12 +166,20 @@ def chat_stream():
 
             # [CALL:agent] 태그 처리
             has_calls = executor.has_call_tags(pm_response)
-            print(f"[DEBUG] has_call_tags: {has_calls}")
-            print(f"[DEBUG] PM response (last 500 chars): {pm_response[-500:]}")
+            call_infos = executor.extract_call_info(pm_response) if has_calls else []
+            total_calls = len(call_infos)
 
-            if has_calls:
-                call_infos = executor.extract_call_info(pm_response)
-                total_calls = len(call_infos)
+            # 디버그 로그 (파일 + 콘솔)
+            import logging
+            logging.basicConfig(level=logging.DEBUG)
+            logger = logging.getLogger(__name__)
+            logger.info(f"[CALL] has_call_tags: {has_calls}, extracted: {total_calls}")
+            if call_infos:
+                for ci in call_infos:
+                    logger.info(f"[CALL] -> {ci['agent']}: {ci['message'][:100]}...")
+            print(f"[DEBUG] has_call_tags: {has_calls}, total_calls: {total_calls}")
+
+            if has_calls and total_calls > 0:
 
                 # 하위 에이전트 호출 시작 알림
                 yield f"data: {json.dumps({'stage': 'delegating', 'total_agents': total_calls, 'agents': [c['agent'] for c in call_infos]}, ensure_ascii=False)}\n\n"

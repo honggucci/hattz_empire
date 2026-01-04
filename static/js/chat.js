@@ -108,7 +108,8 @@ async function sendMessage() {
     // Set status to loading
     setStatus('Thinking...', true);
 
-    // 위젯에 작업 표시
+    // 이전 위젯 정리 후 새 위젯 표시
+    removeWidgetTask('streaming-current');
     const widgetTaskId = showStreamingInWidget(messageInput.value.trim() || message);
 
     // Create AbortController for this request
@@ -1347,9 +1348,7 @@ function updateWidgetTask(taskId, taskData) {
             </div>
             ${elapsedTime > 0 ? `<div class="widget-task-time">경과: ${formatElapsedTime(elapsedTime)}</div>` : ''}
         </div>
-        ${stage !== 'completed' && stage !== 'failed' ? `
-            <button class="widget-task-cancel" onclick="cancelWidgetTask('${taskId}')" title="취소">✕</button>
-        ` : ''}
+        <button class="widget-task-cancel" onclick="removeWidgetTask('${taskId}')" title="${stage === 'completed' || stage === 'failed' ? '닫기' : '취소'}">✕</button>
     `;
 }
 
@@ -1412,7 +1411,8 @@ function completeStreamingInWidget(taskId) {
         stage: 'completed',
         progress: 100
     });
-    setTimeout(() => removeWidgetTask(taskId), 2000);
+    // 위젯 자동 제거 안 함 - 사용자가 직접 닫거나 다음 요청 시까지 유지
+    // setTimeout(() => removeWidgetTask(taskId), 2000);
 }
 
 
