@@ -759,11 +759,13 @@ function renderSessionList() {
 
 // Switch to a session
 async function switchSession(sessionId) {
+    console.log('[DEBUG] switchSession called with:', sessionId);
     try {
         const response = await fetch(`/api/sessions/${sessionId}/switch`, {
             method: 'POST'
         });
         const data = await response.json();
+        console.log('[DEBUG] switchSession response:', data);
 
         currentSessionId = sessionId;
         localStorage.setItem('hattz_session_id', sessionId);
@@ -775,11 +777,18 @@ async function switchSession(sessionId) {
         chatMessages.innerHTML = '';
 
         if (data.messages && data.messages.length > 0) {
+            console.log('[DEBUG] Loading', data.messages.length, 'messages');
             data.messages.forEach(msg => {
                 appendMessage(msg.role, msg.content, msg.agent || data.session.agent);
             });
         } else {
+            console.log('[DEBUG] No messages, showing welcome');
             showWelcomeMessage();
+        }
+
+        // 모바일에서 사이드바 닫기
+        if (typeof closeMobileSidebar === 'function') {
+            closeMobileSidebar();
         }
 
     } catch (error) {
@@ -1688,9 +1697,4 @@ if (sidebarOverlay) {
     sidebarOverlay.addEventListener('click', closeMobileSidebar);
 }
 
-// 세션 선택 시 모바일에서 사이드바 닫기
-const originalSwitchSession = switchSession;
-switchSession = async function(sessionId) {
-    await originalSwitchSession(sessionId);
-    closeMobileSidebar();
-};
+// 세션 선택 시 모바일에서 사이드바 닫기 (이벤트 리스너에서 처리)

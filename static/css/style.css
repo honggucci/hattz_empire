@@ -1169,6 +1169,24 @@ body {
         width: 100%;
         height: 100vh;
         height: 100dvh; /* dynamic viewport height for mobile */
+        min-height: 0; /* flex child shrink 허용 */
+        overflow: hidden;
+    }
+
+    /* 입력창이 항상 보이도록 */
+    .chat-input-area {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        z-index: 100;
+        background: var(--bg-primary);
+        border-top: 1px solid var(--border-color);
+    }
+
+    /* 메시지 영역 - 입력창 높이만큼 하단 패딩 */
+    .chat-messages {
+        padding-bottom: 100px !important;
     }
 
     .chat-header {
