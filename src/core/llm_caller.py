@@ -59,6 +59,25 @@ DUAL_ENGINE_ROLES = {
     },
 }
 
+# VIP 프리픽스용 듀얼 엔진 (VIP Writer + VIP Auditor)
+VIP_DUAL_ENGINE = {
+    "최고/": {  # Opus 4.5 기반
+        "writer": "claude_opus",         # Opus 4.5 - VIP Writer
+        "auditor": "claude_sonnet",      # Sonnet 4 - VIP Auditor
+        "description": "VIP-AUDIT: Opus + Sonnet 크로스체크"
+    },
+    "생각/": {  # GPT-5.2 Thinking 기반
+        "writer": "gpt_thinking",        # GPT-5.2 Thinking Extended
+        "auditor": "claude_opus",        # Opus 4.5 - 크로스체크
+        "description": "VIP-THINKING: GPT-5.2 + Opus 크로스체크"
+    },
+    "검색/": {  # Perplexity 기반
+        "writer": "perplexity_sonar",    # Perplexity Sonar Pro
+        "auditor": "gpt_4o_mini",        # 4o-mini - 팩트체크
+        "description": "RESEARCH: Perplexity + 팩트체크"
+    },
+}
+
 # 위원회별 모델 할당 (저렴한 모델 위주, 타이브레이커만 비싼 모델)
 COUNCIL_MODEL_MAPPING = {
     "code": {
@@ -400,6 +419,114 @@ final_comment: "최종 코멘트"
     return merged_response, meta
 
 
+def call_vip_dual_engine(
+    prefix: str,
+    messages: list,
+    system_prompt: str
+) -> Tuple[str, Dict[str, Any]]:
+    """
+    VIP 듀얼 엔진: CEO 프리픽스 기반 VIP Writer + Auditor 패턴
+
+    - 최고/ : Opus + Sonnet 크로스체크
+    - 생각/ : GPT-5.2 Thinking + Opus 크로스체크
+    - 검색/ : Perplexity + 4o-mini 팩트체크
+
+    Returns:
+        (최종 응답, 메타데이터)
+    """
+    if prefix not in VIP_DUAL_ENGINE:
+        # VIP 프리픽스가 아니면 기본 모델로 폴백
+        return call_llm(MODELS.get("claude_opus", list(MODELS.values())[0]), messages, system_prompt), {"dual": False, "vip": False}
+
+    config = VIP_DUAL_ENGINE[prefix]
+    writer_model = MODELS.get(config["writer"])
+    auditor_model = MODELS.get(config["auditor"])
+
+    if not writer_model:
+        print(f"[VIP-Dual] Writer 모델 {config['writer']} 없음, 폴백")
+        writer_model = MODELS.get("claude_opus", list(MODELS.values())[0])
+
+    if not auditor_model:
+        print(f"[VIP-Dual] Auditor 모델 {config['auditor']} 없음, 폴백")
+        auditor_model = MODELS.get("claude_sonnet", MODELS.get("gpt_4o_mini"))
+
+    # 1단계: VIP Writer 작업
+    print(f"[VIP-Dual] VIP Writer ({writer_model.name}) 작업 중...")
+    writer_response = call_llm(writer_model, messages, system_prompt)
+
+    if "[Error]" in writer_response:
+        return writer_response, {"dual": True, "vip": True, "error": "writer_failed"}
+
+    # 2단계: VIP Auditor 크로스체크
+    auditor_prompt = f"""당신은 VIP 레벨의 Auditor(감사관)입니다.
+
+다른 VIP 모델이 작성한 다음 결과물을 크로스체크하세요:
+
+=== VIP WRITER 결과물 ===
+{writer_response}
+=========================
+
+VIP 레벨 검토 기준:
+1. 논리적 완결성 및 정확도
+2. 누락된 관점/엣지케이스
+3. CEO 의사결정에 미치는 영향
+4. 리스크 요소 확인
+5. 개선/보완 제안
+
+출력 형식:
+```yaml
+verdict: "approve/revise/escalate"
+confidence: 0-100
+key_findings:
+  - "핵심 발견 1"
+  - "핵심 발견 2"
+concerns:
+  - severity: "critical/high/medium/low"
+    description: "우려 사항"
+recommendations:
+  - "권장 사항 1"
+  - "권장 사항 2"
+final_assessment: "최종 평가 (2-3문장)"
+```
+"""
+
+    auditor_messages = messages.copy()
+    auditor_messages.append({"role": "assistant", "content": writer_response})
+    auditor_messages.append({"role": "user", "content": auditor_prompt})
+
+    print(f"[VIP-Dual] VIP Auditor ({auditor_model.name}) 크로스체크 중...")
+    auditor_response = call_llm(auditor_model, auditor_messages, system_prompt)
+
+    # 결과 병합
+    merged_response = f"""## 📝 VIP Writer ({writer_model.name})
+{writer_response}
+
+---
+
+## 🔍 VIP Auditor ({auditor_model.name})
+{auditor_response}
+
+---
+✅ **VIP 듀얼 엔진 검토 완료** ({config['description']})
+"""
+
+    # 메타데이터
+    meta = {
+        "dual": True,
+        "vip": True,
+        "prefix": prefix,
+        "writer_model": writer_model.name,
+        "auditor_model": auditor_model.name,
+        "description": config["description"],
+    }
+
+    # 로그
+    stream = get_stream()
+    stream.log_dual_engine(f"VIP-{prefix}", messages[-1]["content"], writer_response, auditor_response, merged_response)
+
+    return merged_response, meta
+
+
 # =============================================================================
 # 위원회 호출 (Council Integration)
 # =============================================================================
@@ -712,23 +839,38 @@ def check_loop(stage: str, response: str) -> Tuple[bool, Optional[str]]:
 def strip_ceo_prefix(message: str) -> tuple[str, str]:
     """
     CEO 프리픽스 제거 및 실제 메시지 추출
+    [PROJECT: xxx] 래퍼가 있어도 올바르게 처리
 
     Returns:
         (실제 메시지, 사용된 프리픽스 or None)
 
     예시:
         "최고/ 코드 리뷰해줘" → ("코드 리뷰해줘", "최고/")
+        "[PROJECT: test]\n최고/ 리뷰해줘" → ("[PROJECT: test]\n리뷰해줘", "최고/")
         "생각/ 왜 안될까?" → ("왜 안될까?", "생각/")
         "검색/ 최신 버전" → ("최신 버전", "검색/")
         "일반 메시지" → ("일반 메시지", None)
     """
     prefixes = ["최고/", "생각/", "검색/"]
 
+    # Case 1: 직접 프리픽스로 시작하는 경우
     for prefix in prefixes:
         if message.startswith(prefix):
-            # 프리픽스 뒤 공백도 제거
             actual_message = message[len(prefix):].lstrip()
             return actual_message, prefix
+
+    # Case 2: [PROJECT: xxx]\n 래퍼가 있는 경우
+    if message.startswith("[PROJECT:"):
+        lines = message.split("\n", 1)
+        if len(lines) > 1:
+            project_line = lines[0]  # "[PROJECT: xxx]"
+            content_line = lines[1]   # "최고/ 실제 메시지"
+
+            for prefix in prefixes:
+                if content_line.startswith(prefix):
+                    # 프리픽스 제거 후 [PROJECT:] 유지
+                    actual_content = content_line[len(prefix):].lstrip()
+                    return f"{project_line}\n{actual_content}", prefix
 
     return message, None
 
@@ -761,6 +903,12 @@ def call_agent(
 
     current_session_id = get_current_session()
     start_time = time_module.time()
+
+    # 디버그: 입력 메시지 확인
+    import sys
+    sys.stderr.write(f"[DEBUG-INPUT] message[:50]={message[:50] if len(message) > 50 else message}\n")
+    sys.stderr.write(f"[DEBUG-INPUT] message.startswith('최고/')={message.startswith('최고/')}\n")
+    sys.stderr.flush()
 
     # CEO 프리픽스 체크 (라우팅용 원본 유지)
     actual_message, used_prefix = strip_ceo_prefix(message)
@@ -825,10 +973,59 @@ def call_agent(
     dual_meta = {"dual": False}
     council_result = None
 
+    # 디버그: VIP 조건 체크 (flush=True로 즉시 출력, stderr로도 출력)
+    import sys
+    debug_msg = f"[DEBUG-VIP] use_dual_engine={use_dual_engine}, used_prefix='{used_prefix}', prefix_in_dict={used_prefix in VIP_DUAL_ENGINE if used_prefix else 'N/A'}"
+    print(debug_msg, flush=True)
+    sys.stderr.write(debug_msg + "\n")
+    sys.stderr.flush()
+
+    debug_msg2 = f"[DEBUG-VIP] VIP_DUAL_ENGINE keys: {list(VIP_DUAL_ENGINE.keys())}"
+    print(debug_msg2, flush=True)
+    sys.stderr.write(debug_msg2 + "\n")
+    sys.stderr.flush()
+
     # =========================================================================
-    # 듀얼 엔진 V2 사용 (use_dual_engine=True이고 역할이 지원되는 경우)
+    # VIP 듀얼 엔진 모드 (CEO 프리픽스 사용 시)
     # =========================================================================
-    if use_dual_engine and agent_role in DUAL_ENGINE_ROLES and not used_prefix:
+    if use_dual_engine and used_prefix and used_prefix in VIP_DUAL_ENGINE:
+        print(f"[VIP-Dual] {used_prefix} VIP 듀얼 엔진 모드 활성화")
+        response, dual_meta = call_vip_dual_engine(used_prefix, messages, system_prompt)
+
+        # VIP 모드에서도 위원회 자동 소집 체크
+        if auto_council:
+            council_type = should_convene_council(agent_role, response)
+            if council_type:
+                print(f"[Council] VIP 자동 소집 트리거: {council_type}")
+                try:
+                    council_result = convene_council_sync(council_type, response, agent_message)
+                    model_meta['council'] = council_result
+
+                    # 위원회 결과를 응답에 추가
+                    response += f"""
+
+---
+
+## 🏛️ {council_type.upper()} 위원회 판정
+
+{council_result['summary']}
+
+**상세 점수:**
+"""
+                    for judge in council_result['judges']:
+                        response += f"- {judge['icon']} {judge['persona']}: {judge['score']}/10 - {judge['reasoning'][:100]}...\n"
+
+                except Exception as e:
+                    print(f"[Council] 소집 실패: {e}")
+
+        stream = get_stream()
+        stream.log("ceo", agent_role, "request", agent_message)
+        stream.log(agent_role, "ceo", "response", response)
+
+    # =========================================================================
+    # 일반 듀얼 엔진 V2 사용 (use_dual_engine=True이고 역할이 지원되는 경우)
+    # =========================================================================
+    elif use_dual_engine and agent_role in DUAL_ENGINE_ROLES and not used_prefix:
         print(f"[Dual-V2] {agent_role} 듀얼 엔진 모드 활성화")
         response, dual_meta = call_dual_engine_v2(agent_role, messages, system_prompt)
 
@@ -863,7 +1060,7 @@ def call_agent(
         stream.log(agent_role, "ceo", "response", response)
 
     # =========================================================================
-    # 기존 라우터 모드 (CEO 프리픽스 사용 또는 듀얼 비활성화)
+    # 레거시 라우터 모드 (듀얼 엔진 비활성화 시)
     # =========================================================================
     elif use_router:
         response = router.call_model(routing, messages, system_prompt)

@@ -223,6 +223,104 @@
             font-size: 0.85rem;
             margin-top: 5px;
         }
+
+        /* Process Monitor Styles */
+        .process-info {
+            margin-bottom: 15px;
+            padding: 10px;
+            background: #1a1a24;
+            border-radius: 6px;
+            font-size: 0.9rem;
+        }
+
+        .process-warning {
+            color: #ff6b6b;
+            font-weight: 600;
+            margin-left: 20px;
+            animation: blink 1s infinite;
+        }
+
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .process-item {
+            background: #1a1a24;
+            border: 1px solid #2a2a3a;
+            border-radius: 6px;
+            padding: 12px 15px;
+            display: grid;
+            grid-template-columns: 80px 1fr auto auto auto;
+            gap: 15px;
+            align-items: center;
+        }
+
+        .process-item.current {
+            border-color: #00ff8855;
+            background: #00ff8811;
+        }
+
+        .process-item.flask {
+            border-left: 3px solid #00aaff;
+        }
+
+        .process-item.current.flask {
+            border-left: 3px solid #00ff88;
+        }
+
+        .process-pid {
+            font-weight: 600;
+            color: #00aaff;
+        }
+
+        .process-item.current .process-pid {
+            color: #00ff88;
+        }
+
+        .process-cmd {
+            color: #888;
+            font-size: 0.8rem;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .process-memory {
+            color: #ffd93d;
+            font-size: 0.85rem;
+            min-width: 70px;
+            text-align: right;
+        }
+
+        .process-cpu {
+            color: #6bcb77;
+            font-size: 0.85rem;
+            min-width: 50px;
+            text-align: right;
+        }
+
+        .process-badge {
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 0.7rem;
+            text-transform: uppercase;
+        }
+
+        .process-badge.current {
+            background: #00ff8833;
+            color: #00ff88;
+        }
+
+        .process-badge.flask {
+            background: #00aaff33;
+            color: #00aaff;
+        }
+
+        .process-badge.other {
+            background: #88888833;
+            color: #888;
+        }
     </style>
 </head>
 <body>
@@ -247,6 +345,10 @@
         <div class="stat-card">
             <h3>임베딩 큐</h3>
             <div class="stat-value" id="embedding-queue">-</div>
+        </div>
+        <div class="stat-card">
+            <h3>Python 프로세스</h3>
+            <div class="stat-value" id="process-count">-</div>
         </div>
     </div>
 
@@ -277,6 +379,22 @@
         </h2>
         <div class="task-list" id="completed-tasks">
             <div class="empty-state">완료된 작업이 없습니다</div>
+        </div>
+    </div>
+
+    <!-- Process Monitor -->
+    <div class="section">
+        <h2>
+            🖥️ Python 프로세스 모니터
+            <span class="count" id="process-total-count">0</span>
+        </h2>
+        <div class="process-info">
+            <span>현재 Flask PID: <strong id="current-pid">-</strong></span>
+            <span style="margin-left: 20px;">Flask 프로세스: <strong id="flask-count">-</strong>개</span>
+            <span id="process-warning" class="process-warning" style="display: none;">⚠️ 여러 Flask 프로세스가 실행 중입니다!</span>
+        </div>
+        <div class="task-list" id="process-list">
+            <div class="empty-state">프로세스 정보 로딩 중...</div>
         </div>
     </div>
 
@@ -364,13 +482,71 @@
             }
         }
 
+        function renderProcess(proc) {
+            const classes = ['process-item'];
+            if (proc.is_current) classes.push('current');
+            if (proc.is_flask) classes.push('flask');
+
+            let badge = '<span class="process-badge other">Python</span>';
+            if (proc.is_current) {
+                badge = '<span class="process-badge current">현재 서버</span>';
+            } else if (proc.is_flask) {
+                badge = '<span class="process-badge flask">Flask</span>';
+            }
+
+            return `
+                <div class="${classes.join(' ')}">
+                    <span class="process-pid">PID ${proc.pid}</span>
+                    <span class="process-cmd" title="${proc.cmdline}">${proc.cmdline || proc.name}</span>
+                    <span class="process-memory">${proc.memory_mb} MB</span>
+                    <span class="process-cpu">${proc.cpu_percent.toFixed(1)}%</span>
+                    ${badge}
+                </div>
+            `;
+        }
+
+        async function updateProcesses() {
+            try {
+                const res = await fetch('/api/monitor/processes');
+                const data = await res.json();
+
+                // Stats 업데이트
+                document.getElementById('process-count').textContent = data.total_count || 0;
+                document.getElementById('process-count').className = 'stat-value' + (data.flask_count > 1 ? ' error' : '');
+                document.getElementById('process-total-count').textContent = data.total_count || 0;
+                document.getElementById('current-pid').textContent = data.current_pid || '-';
+                document.getElementById('flask-count').textContent = data.flask_count || 0;
+
+                // 경고 표시
+                const warning = document.getElementById('process-warning');
+                if (data.flask_count > 1) {
+                    warning.style.display = 'inline';
+                } else {
+                    warning.style.display = 'none';
+                }
+
+                // 프로세스 리스트 렌더링
+                const processes = data.python_processes || [];
+                if (processes.length > 0) {
+                    document.getElementById('process-list').innerHTML = processes.map(renderProcess).join('');
+                } else {
+                    document.getElementById('process-list').innerHTML = '<div class="empty-state">Python 프로세스가 없습니다</div>';
+                }
+            } catch (err) {
+                console.error('Process update failed:', err);
+                document.getElementById('process-list').innerHTML = '<div class="empty-state">프로세스 정보 로드 실패</div>';
+            }
+        }
+
         // 초기 로드
         updateDashboard();
         updateEmbeddingQueue();
+        updateProcesses();
 
         // 자동 갱신
         setInterval(updateDashboard, 1000);
         setInterval(updateEmbeddingQueue, 5000);
+        setInterval(updateProcesses, 3000);  // 3초마다 프로세스 갱신
     </script>
 </body>
 </html>

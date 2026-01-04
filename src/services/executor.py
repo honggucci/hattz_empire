@@ -91,8 +91,9 @@ def is_path_allowed(path: str) -> bool:
 
 def sanitize_path(path: str) -> str:
     """경로 정규화 및 위험 패턴 제거"""
-    # .. 경로 탈출 방지
-    path = os.path.normpath(path)
+    # 절대 경로로 변환 (상대 경로 '.', '..' 처리)
+    path = os.path.abspath(path)
+    # .. 경로 탈출 방지 (abspath 이후에도 남아있으면 위험)
     if ".." in path:
         raise ValueError(f"Path traversal detected: {path}")
     return path
