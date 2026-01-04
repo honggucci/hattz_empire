@@ -227,6 +227,15 @@ async function sendMessage() {
                             // pm_done은 done이 아님 - 위젯 유지
                         }
 
+                        // 팩트체크 결과 처리
+                        if (data.fact_check) {
+                            console.log('[FactCheck]', data.fact_check.valid ? '✅ Valid' : '⚠️ Hallucination detected');
+                            if (!data.fact_check.valid) {
+                                // 거짓말 탐지 경고 표시
+                                showFactCheckWarning(data.fact_check);
+                            }
+                        }
+
                         if (data.done) {
                             // 모델 정보가 done과 함께 오면 업데이트
                             if (data.model_info) {
@@ -1413,6 +1422,57 @@ function completeStreamingInWidget(taskId) {
     });
     // 위젯 자동 제거 안 함 - 사용자가 직접 닫거나 다음 요청 시까지 유지
     // setTimeout(() => removeWidgetTask(taskId), 2000);
+}
+
+
+// =============================================================================
+// Fact Check Warning - 거짓말/환각 탐지 경고
+// =============================================================================
+
+function showFactCheckWarning(factCheck) {
+    const { warning, hallucinations, confidence } = factCheck;
+
+    // 경고 배너 생성
+    const warningBanner = document.createElement('div');
+    warningBanner.className = 'fact-check-warning';
+    warningBanner.innerHTML = `
+        <div class="fact-check-header">
+            <span class="fact-check-icon">⚠️</span>
+            <span class="fact-check-title">팩트체크 경고</span>
+            <span class="fact-check-confidence">신뢰도: ${Math.round(confidence * 100)}%</span>
+            <button class="fact-check-close" onclick="this.parentElement.parentElement.remove()">✕</button>
+        </div>
+        <div class="fact-check-content">
+            ${hallucinations.map(h => `
+                <div class="hallucination-item ${h.severity || 'medium'}">
+                    <span class="hallucination-type">${getHallucinationTypeLabel(h.type)}</span>
+                    <span class="hallucination-claim">"${(h.claim || '').substring(0, 100)}..."</span>
+                    ${h.reason ? `<span class="hallucination-reason">${h.reason}</span>` : ''}
+                </div>
+            `).join('')}
+        </div>
+        <div class="fact-check-footer">
+            <small>PM이 [EXEC] 태그 없이 실행/완료를 주장했습니다. 실제 검증이 필요합니다.</small>
+        </div>
+    `;
+
+    // 마지막 메시지 박스 뒤에 삽입
+    const chatMessages = document.getElementById('chatMessages');
+    if (chatMessages) {
+        chatMessages.appendChild(warningBanner);
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
+}
+
+function getHallucinationTypeLabel(type) {
+    const labels = {
+        'test_executed': '🧪 테스트 실행 주장',
+        'file_read': '📖 파일 확인 주장',
+        'file_written': '📝 파일 생성/수정 주장',
+        'command_executed': '⚡ 명령어 실행 주장',
+        'feature_exists': '✨ 기능 존재 주장'
+    };
+    return labels[type] || type;
 }
 
 

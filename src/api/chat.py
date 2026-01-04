@@ -17,6 +17,7 @@ active_streams: dict[str, bool] = {}
 from src.core.llm_caller import call_agent, process_call_tags, build_call_results_prompt, mock_agent_response
 from src.core.session_state import get_current_session, set_current_session
 from src.services.agent_monitor import get_agent_monitor
+from src.services.fact_checker import fact_check, format_fact_check_result
 import src.services.database as db
 import src.services.executor as executor
 
@@ -163,6 +164,21 @@ def chat_stream():
             # PM 응답 완료 (단, CALL 태그가 있으면 아직 done이 아님)
             yield f"data: {json.dumps({'pm_done': True, 'pm_response': pm_response, 'agent': agent_role, 'model_info': model_meta}, ensure_ascii=False)}\n\n"
             db.add_message(session_id, 'assistant', pm_response, agent_role)
+
+            # =================================================================
+            # 팩트체크: PM 응답의 거짓말/환각 탐지
+            # =================================================================
+            try:
+                fact_result = fact_check(pm_response, use_gemini=True)
+                if not fact_result.is_valid:
+                    # 거짓말 탐지됨 - 클라이언트에 경고 전송
+                    fact_warning = format_fact_check_result(fact_result)
+                    yield f"data: {json.dumps({'fact_check': {'valid': False, 'warning': fact_warning, 'hallucinations': fact_result.hallucinations, 'confidence': fact_result.confidence}}, ensure_ascii=False)}\n\n"
+                    print(f"[FactChecker] ⚠️ {len(fact_result.hallucinations)} hallucinations detected!")
+                else:
+                    print(f"[FactChecker] ✅ PM response validated")
+            except Exception as e:
+                print(f"[FactChecker] Error: {e}")
 
             # [CALL:agent] 태그 처리
             has_calls = executor.has_call_tags(pm_response)
