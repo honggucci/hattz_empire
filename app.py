@@ -70,10 +70,50 @@ with app.app_context():
 atexit.register(shutdown_embedding_worker)
 
 
+def check_port_in_use(port: int) -> tuple[bool, int]:
+    """포트 사용 중인지 확인하고 PID 반환"""
+    import socket
+    import subprocess
+
+    # 소켓으로 포트 확인
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        in_use = s.connect_ex(('127.0.0.1', port)) == 0
+
+    if not in_use:
+        return False, 0
+
+    # Windows에서 PID 찾기
+    try:
+        result = subprocess.run(
+            ['netstat', '-ano'],
+            capture_output=True, text=True, shell=True
+        )
+        for line in result.stdout.split('\n'):
+            if f':{port}' in line and 'LISTENING' in line:
+                parts = line.split()
+                if parts:
+                    return True, int(parts[-1])
+    except:
+        pass
+
+    return True, 0
+
+
 if __name__ == '__main__':
+    PORT = 5000
+
+    # 중복 실행 방지
+    in_use, pid = check_port_in_use(PORT)
+    if in_use:
+        print(f"\n[WARNING] Port {PORT} is already in use! (PID: {pid})")
+        print(f"  Kill existing: taskkill /F /PID {pid}")
+        print(f"  Or use another port: python app.py --port 5001\n")
+        exit(1)
+
     print("\n" + "="*60)
     print("HATTZ EMPIRE - Web Interface")
+    print(f"PID: {os.getpid()}")
     print("="*60)
     print("http://localhost:5000")
     print("="*60 + "\n")
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    app.run(debug=True, host='0.0.0.0', port=PORT, use_reloader=False)
