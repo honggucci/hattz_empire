@@ -308,10 +308,10 @@ dfs = [pd.read_parquet(f) for f in files]
 df = pd.concat(dfs, ignore_index=True)
 df = df.sort_values("timestamp").drop_duplicates("timestamp").set_index("timestamp")
 
-# 설정
+# 설정 (edge_min=0.0으로 Navigation Gate edge 조건 비활성화)
 theta = Theta(pivot_lr=3, box_L=50, m_freeze=16, atr_len=14, x_atr=2.0, m_bw=0.02, N_reclaim=8, N_fill=5, F_min=0.3)
 costs = BacktestCosts(fee_bps=7.5, slippage_bps=5.0)
-cfg = BacktestConfig(initial_equity=10000.0, max_hold_bars=288, conf_min=0.3)
+cfg = BacktestConfig(initial_equity=10000.0, max_hold_bars=288, conf_min=0.30, edge_min=0.0, confirm_bars=1)
 
 # 백테스트
 equity_df, trades_df, signals_df, nav_df = simulate_mtf(

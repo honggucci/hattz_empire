@@ -287,12 +287,13 @@ def call_agent(
         try:
             rag_context = rag.build_context(
                 agent_message,
-                top_k=3,
+                top_k=5,  # 3 → 5로 확장 (더 많은 과거 대화 참조)
                 use_gemini=True,
                 language="en"
             )
             if rag_context:
                 system_prompt = system_prompt + "\n\n" + rag_context
+                print(f"[RAG] Context injected: {len(rag_context)} chars")
         except Exception as e:
             print(f"[RAG] Context injection failed: {e}")
 
