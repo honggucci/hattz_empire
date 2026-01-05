@@ -117,6 +117,14 @@ MODELS = {
         temperature=0.2,
         max_tokens=8192,
     ),
+    "claude_haiku": ModelConfig(
+        name="Claude Haiku 4.5",
+        provider="anthropic",
+        model_id="claude-haiku-4-5-20251001",
+        api_key_env="ANTHROPIC_API_KEY",
+        temperature=0.3,
+        max_tokens=8192,
+    ),
 
     # OpenAI - Thinking Extend 모드 (max_tokens 증가, temperature 낮춤)
     "gpt_thinking": ModelConfig(
@@ -129,23 +137,23 @@ MODELS = {
         thinking_mode=True,
     ),
 
-    # Google - Gemini 3 Pro Preview (2026.01 최신)
-    "gemini_pro": ModelConfig(
-        name="Gemini 3 Pro",
+    # Google - Gemini 2.5 Flash
+    "gemini_flash": ModelConfig(
+        name="Gemini 2.5 Flash",
         provider="google",
-        model_id="gemini-3-pro-preview",
+        model_id="gemini-2.5-flash",
         api_key_env="GOOGLE_API_KEY",
-        temperature=1.0,  # Gemini 3는 temperature 1.0 권장
+        temperature=1.0,
         max_tokens=16384,
     ),
 
-    # OpenAI - GPT-4o-mini (저렴한 산출물용)
-    "gpt_4o_mini": ModelConfig(
-        name="GPT-4o-mini",
+    # OpenAI - GPT-5 mini (저렴한 산출물용)
+    "gpt_5_mini": ModelConfig(
+        name="GPT-5 mini",
         provider="openai",
-        model_id="gpt-4o-mini",
+        model_id="gpt-5-mini",
         api_key_env="OPENAI_API_KEY",
-        temperature=0.5,
+        temperature=1.0,  # 기본값 사용
         max_tokens=8192,
     ),
 }
@@ -173,7 +181,7 @@ DUAL_ENGINES = {
     "strategist": DualEngineConfig(
         role="strategist",
         engine_1=MODELS["gpt_thinking"],     # 깊은 논리적 사고
-        engine_2=MODELS["gemini_pro"],       # 대용량 데이터 분석
+        engine_2=MODELS["gemini_flash"],       # 대용량 데이터 분석
         merge_strategy="consensus",
         description="전략 프레임워크 설계 + 데이터 기반 분석",
     ),
@@ -205,7 +213,7 @@ DUAL_ENGINES = {
     # =========================================================================
     "researcher": DualEngineConfig(
         role="researcher",
-        engine_1=MODELS["gemini_pro"],       # 대용량 웹 데이터 처리
+        engine_1=MODELS["gemini_flash"],       # 대용량 웹 데이터 처리
         engine_2=MODELS["claude_opus"],      # 정보 검증, 팩트체크
         merge_strategy="consensus",          # 둘의 분석 종합
         description="외부 데이터 검색 + 웹 리서치 + 정보 검증",
@@ -216,9 +224,9 @@ DUAL_ENGINES = {
     # =========================================================================
     "documentor": DualEngineConfig(
         role="documentor",
-        engine_1=MODELS["gemini_pro"],       # 대용량 컨텍스트, 구조화
-        engine_2=MODELS["gpt_4o_mini"],      # 저렴, 빠른 수정/보완
-        merge_strategy="primary_fallback",   # Gemini 우선, 보완은 GPT-4o-mini
+        engine_1=MODELS["gemini_flash"],       # 대용량 컨텍스트, 구조화
+        engine_2=MODELS["gpt_5_mini"],       # 저렴, 빠른 수정/보완
+        merge_strategy="primary_fallback",   # Gemini 우선, 보완은 GPT-5-mini
         description="문서/리포트/README/스펙 작성 (비용 효율)",
     ),
 }
@@ -229,8 +237,8 @@ DUAL_ENGINES = {
 # =============================================================================
 
 SINGLE_ENGINES = {
-    "pm": MODELS["claude_opus"],           # 오케스트레이션
-    "analyst": MODELS["gemini_pro"],       # 로그 분석 + 시스템 모니터링 (1M 컨텍스트)
+    "pm": MODELS["claude_haiku"],          # 기본 채팅 (비용 절감), VIP 프리픽스로 Opus 사용
+    "analyst": MODELS["gemini_flash"],     # 로그 분석 + 시스템 모니터링
 }
 
 

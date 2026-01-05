@@ -34,7 +34,7 @@ from config import (
 DUAL_ENGINE_ROLES = {
     "coder": {
         "writer": "claude_sonnet",      # Sonnet 4 - 빠른 코드 작성
-        "auditor": "gpt_4o_mini",        # 4o-mini - 저렴한 리뷰
+        "auditor": "gpt_5_mini",         # GPT-5 mini - 저렴한 리뷰
         "description": "코드 작성 + 리뷰"
     },
     "strategist": {
@@ -43,18 +43,18 @@ DUAL_ENGINE_ROLES = {
         "description": "전략 수립 + 검증"
     },
     "qa": {
-        "writer": "gpt_4o_mini",         # 4o-mini - 빠른 테스트 생성
+        "writer": "gpt_5_mini",          # GPT-5 mini - 빠른 테스트 생성
         "auditor": "claude_sonnet",      # Sonnet - 보안/엣지케이스 검증
         "description": "테스트 생성 + 검증"
     },
     "researcher": {
-        "writer": "gemini_pro",          # Gemini 3 Pro - 검색/수집
-        "auditor": "gpt_4o_mini",        # 4o-mini - 팩트체크
+        "writer": "gemini_flash",        # Gemini 3 Flash - 검색/수집
+        "auditor": "gpt_5_mini",         # GPT-5 mini - 팩트체크
         "description": "리서치 + 검증"
     },
     "excavator": {
         "writer": "claude_sonnet",       # Sonnet - 의도 파악
-        "auditor": "gpt_4o_mini",        # 4o-mini - 확인
+        "auditor": "gpt_5_mini",         # GPT-5 mini - 확인
         "description": "CEO 의도 발굴 + 확인"
     },
 }
@@ -73,7 +73,7 @@ VIP_DUAL_ENGINE = {
     },
     "검색/": {  # Perplexity 기반
         "writer": "perplexity_sonar",    # Perplexity Sonar Pro
-        "auditor": "gpt_4o_mini",        # 4o-mini - 팩트체크
+        "auditor": "gpt_5_mini",         # GPT-5 mini - 팩트체크
         "description": "RESEARCH: Perplexity + 팩트체크"
     },
 }
@@ -82,33 +82,33 @@ VIP_DUAL_ENGINE = {
 COUNCIL_MODEL_MAPPING = {
     "code": {
         "personas": {
-            "skeptic": "gpt_4o_mini",
+            "skeptic": "gpt_5_mini",
             "perfectionist": "claude_haiku",    # Haiku 없으면 4o-mini로 대체
-            "pragmatist": "gpt_4o_mini",
+            "pragmatist": "gpt_5_mini",
         },
         "tiebreaker": "claude_sonnet",           # 의견 갈릴 때 Sonnet
     },
     "strategy": {
         "personas": {
-            "pessimist": "gpt_4o_mini",
+            "pessimist": "gpt_5_mini",
             "optimist": "claude_haiku",
-            "devils_advocate": "gpt_4o_mini",
+            "devils_advocate": "gpt_5_mini",
         },
         "tiebreaker": "gpt_thinking",            # 전략은 GPT-5.2 Thinking
     },
     "security": {
         "personas": {
             "security_hawk": "claude_sonnet",    # 보안은 Sonnet 필수
-            "skeptic": "gpt_4o_mini",
-            "pessimist": "gpt_4o_mini",
+            "skeptic": "gpt_5_mini",
+            "pessimist": "gpt_5_mini",
         },
         "tiebreaker": "claude_opus",             # 보안 최종은 Opus
     },
     "deploy": {
         "personas": {
             "security_hawk": "claude_sonnet",
-            "pessimist": "gpt_4o_mini",
-            "pragmatist": "gpt_4o_mini",
+            "pessimist": "gpt_5_mini",
+            "pragmatist": "gpt_5_mini",
             "perfectionist": "claude_haiku",
         },
         "tiebreaker": "claude_opus",             # 배포 최종은 CEO(Opus)
@@ -116,8 +116,8 @@ COUNCIL_MODEL_MAPPING = {
     },
     "mvp": {
         "personas": {
-            "pragmatist": "gpt_4o_mini",
-            "optimist": "gpt_4o_mini",
+            "pragmatist": "gpt_5_mini",
+            "optimist": "gpt_5_mini",
             "skeptic": "claude_haiku",
         },
         "tiebreaker": "claude_sonnet",
@@ -132,17 +132,8 @@ LOOP_BREAKER_CONFIG = {
     "ESCALATE_TO_CEO": True,   # 루프 감지시 CEO 에스컬레이션
 }
 
-# Haiku 모델 추가 (저렴한 위원회용)
-if "claude_haiku" not in MODELS:
-    from config import ModelConfig as MC
-    MODELS["claude_haiku"] = MC(
-        name="Claude Haiku 3.5",
-        provider="anthropic",
-        model_id="claude-3-5-haiku-20241022",
-        api_key_env="ANTHROPIC_API_KEY",
-        temperature=0.3,
-        max_tokens=4096,
-    )
+# Haiku 모델 추가 (저렴한 위원회용) - config.py에 이미 있으면 스킵
+# 이제 config.py에 claude_haiku가 정의되어 있으므로 이 블록은 폴백용으로만 유지
 
 from src.infra.stream import get_stream
 from src.core.router import get_router, route_message
@@ -203,11 +194,12 @@ def call_openai(model_config: ModelConfig, messages: list, system_prompt: str) -
         full_messages = [{"role": "system", "content": system_prompt}]
         full_messages.extend(messages)
 
+        # GPT-5 계열: temperature 지원 안함, max_completion_tokens 사용
         if model_config.model_id.startswith("gpt-5"):
             response = client.chat.completions.create(
                 model=model_config.model_id,
                 max_completion_tokens=model_config.max_tokens,
-                temperature=model_config.temperature,
+                # GPT-5는 temperature=1만 지원 (파라미터 생략)
                 messages=full_messages
             )
         else:
@@ -345,7 +337,7 @@ def call_dual_engine_v2(
 
     config = DUAL_ENGINE_ROLES[role]
     writer_model = MODELS.get(config["writer"], MODELS["claude_sonnet"])
-    auditor_model = MODELS.get(config["auditor"], MODELS["gpt_4o_mini"])
+    auditor_model = MODELS.get(config["auditor"], MODELS["gpt_5_mini"])
 
     # 1단계: Writer 초안 작성
     print(f"[Dual-V2] {role} Writer ({writer_model.name}) 작업 중...")
@@ -448,7 +440,7 @@ def call_vip_dual_engine(
 
     if not auditor_model:
         print(f"[VIP-Dual] Auditor 모델 {config['auditor']} 없음, 폴백")
-        auditor_model = MODELS.get("claude_sonnet", MODELS.get("gpt_4o_mini"))
+        auditor_model = MODELS.get("claude_sonnet", MODELS.get("gpt_5_mini"))
 
     # 1단계: VIP Writer 작업
     print(f"[VIP-Dual] VIP Writer ({writer_model.name}) 작업 중...")
@@ -544,16 +536,16 @@ async def call_council_llm(
     COUNCIL_MODEL_MAPPING에 따라 적절한 모델 선택
     """
     # 모델 선택 로직
-    model_key = "gpt_4o_mini"  # 기본값
+    model_key = "gpt_5_mini"  # 기본값
 
     if council_type and persona_id:
         mapping = COUNCIL_MODEL_MAPPING.get(council_type, {})
         personas = mapping.get("personas", {})
-        model_key = personas.get(persona_id, "gpt_4o_mini")
+        model_key = personas.get(persona_id, "gpt_5_mini")
 
     model_config = MODELS.get(model_key)
     if not model_config:
-        model_config = MODELS["gpt_4o_mini"] if "gpt_4o_mini" in MODELS else list(MODELS.values())[0]
+        model_config = MODELS["gpt_5_mini"] if "gpt_5_mini" in MODELS else list(MODELS.values())[0]
 
     # temperature 오버라이드
     original_temp = model_config.temperature
@@ -583,16 +575,16 @@ def init_council_with_llm():
     ) -> str:
         """위원회 LLM 호출 (모델 매핑 지원)"""
         # 모델 선택 로직
-        model_key = "gpt_4o_mini"  # 기본값
+        model_key = "gpt_5_mini"  # 기본값
 
         if council_type and persona_id:
             mapping = COUNCIL_MODEL_MAPPING.get(council_type, {})
             personas = mapping.get("personas", {})
-            model_key = personas.get(persona_id, "gpt_4o_mini")
+            model_key = personas.get(persona_id, "gpt_5_mini")
 
         model_config = MODELS.get(model_key)
         if not model_config:
-            model_config = MODELS.get("gpt_4o_mini", list(MODELS.values())[0])
+            model_config = MODELS.get("gpt_5_mini", list(MODELS.values())[0])
 
         print(f"[Council] {persona_id} → {model_config.name}")
 
@@ -875,6 +867,26 @@ def strip_ceo_prefix(message: str) -> tuple[str, str]:
     return message, None
 
 
+def extract_project_from_message(message: str) -> tuple[str, str]:
+    """
+    [PROJECT: xxx] 태그에서 프로젝트명 추출
+
+    Returns:
+        (project_name, message_without_project_tag)
+
+    예시:
+        "[PROJECT: test]\n안녕" → ("test", "안녕")
+        "그냥 메시지" → (None, "그냥 메시지")
+    """
+    import re
+    match = re.match(r'\[PROJECT:\s*([^\]]+)\]\s*\n?(.*)', message, re.DOTALL)
+    if match:
+        project = match.group(1).strip()
+        remaining = match.group(2).strip()
+        return project, remaining
+    return None, message
+
+
 def call_agent(
     message: str,
     agent_role: str,
@@ -909,6 +921,11 @@ def call_agent(
     sys.stderr.write(f"[DEBUG-INPUT] message[:50]={message[:50] if len(message) > 50 else message}\n")
     sys.stderr.write(f"[DEBUG-INPUT] message.startswith('최고/')={message.startswith('최고/')}\n")
     sys.stderr.flush()
+
+    # [PROJECT: xxx] 태그에서 프로젝트 추출
+    current_project, message_without_project = extract_project_from_message(message)
+    if current_project:
+        print(f"[Project] Detected: {current_project}")
 
     # CEO 프리픽스 체크 (라우팅용 원본 유지)
     actual_message, used_prefix = strip_ceo_prefix(message)
@@ -947,13 +964,14 @@ def call_agent(
         try:
             rag_context = rag.build_context(
                 agent_message,
-                top_k=5,  # 3 → 5로 확장 (더 많은 과거 대화 참조)
+                project=current_project,  # 프로젝트별 RAG 필터링
+                top_k=5,
                 use_gemini=True,
                 language="en"
             )
             if rag_context:
                 system_prompt = system_prompt + "\n\n" + rag_context
-                print(f"[RAG] Context injected: {len(rag_context)} chars")
+                print(f"[RAG] Context injected ({current_project or 'all'}): {len(rag_context)} chars")
         except Exception as e:
             print(f"[RAG] Context injection failed: {e}")
 

@@ -19,12 +19,14 @@ MODEL_PRICING = {
 
     # OpenAI
     'gpt-4o': (2.50, 10.0),
-    'gpt-4o-mini': (0.15, 0.60),
+    'gpt-5-mini': (0.30, 1.25),
+    'gpt-5.2': (2.50, 10.0),
     'o1': (15.0, 60.0),
     'o1-mini': (3.0, 12.0),
     'o3-mini': (1.10, 4.40),
 
     # Google
+    'gemini-3-flash': (0.10, 0.40),
     'gemini-2.0-flash': (0.10, 0.40),
     'gemini-2.0-flash-lite': (0.075, 0.30),
     'gemini-1.5-pro': (1.25, 5.0),
@@ -38,7 +40,7 @@ MODEL_PRICING = {
 
 # 모델 티어 매핑
 MODEL_TIERS = {
-    'budget': ['gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gpt-4o-mini', 'claude-3-5-haiku-20241022'],
+    'budget': ['gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gpt-5-mini', 'claude-3-5-haiku-20241022'],
     'standard': ['claude-sonnet-4-20250514', 'claude-3-5-sonnet-20241022', 'gpt-4o', 'gemini-1.5-pro'],
     'premium': ['claude-opus-4-5-20250514', 'o1', 'o1-mini'],
     'thinking': ['o3-mini', 'o1'],

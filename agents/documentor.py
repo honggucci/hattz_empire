@@ -1,10 +1,10 @@
 """
-Hattz Empire - Documentor (DUAL ENGINE: Gemini 3.0 Pro + GPT-4o-mini)
+Hattz Empire - Documentor (DUAL ENGINE: Gemini 3 Flash + GPT-5-mini)
 산출물/문서 작성 전문 에이전트
 
 비용 효율적인 조합:
-- Engine 1 (Gemini): 대용량 컨텍스트, 구조화, 초안 작성
-- Engine 2 (GPT-4o-mini): 저렴한 수정/보완/포맷팅
+- Engine 1 (Gemini 3 Flash): 대용량 컨텍스트, 구조화, 초안 작성
+- Engine 2 (GPT-5-mini): 저렴한 수정/보완/포맷팅
 """
 from typing import Any, Optional
 from dataclasses import dataclass
@@ -42,12 +42,12 @@ class Documentor(DualEngineAgent):
     """
     Documentor - 산출물/문서 작성 전문가
 
-    Engine 1 (Gemini 3.0 Pro):
-      - 대용량 컨텍스트 활용 (1M tokens)
+    Engine 1 (Gemini 3 Flash):
+      - 빠른 응답 + 대용량 컨텍스트
       - 전체 코드베이스 분석 후 문서화
       - 구조화된 초안 작성
 
-    Engine 2 (GPT-4o-mini):
+    Engine 2 (GPT-5-mini):
       - 저렴한 비용 ($0.15/1M input, $0.60/1M output)
       - 빠른 수정/보완
       - 포맷팅/다듬기
@@ -88,7 +88,7 @@ class Documentor(DualEngineAgent):
         """
         primary_fallback 전략:
         - Gemini 응답이 있으면 사용
-        - 없거나 에러면 GPT-4o-mini 응답 사용
+        - 없거나 에러면 GPT-5-mini 응답 사용
         """
         if response_1.content and not response_1.error:
             return response_1.content
@@ -160,9 +160,9 @@ Markdown으로 직접 작성해주세요 (YAML 아님).
         response = self.process_single({"prompt": prompt}, engine="engine_1", task_id=task_id)
 
         if response.error:
-            # fallback to GPT-4o-mini
+            # fallback to GPT-5-mini
             response = self.process_single({"prompt": prompt}, engine="engine_2", task_id=task_id)
-            engine_used = "gpt-4o-mini"
+            engine_used = "gpt-5-mini"
         else:
             engine_used = "gemini-3-pro"
 
@@ -226,7 +226,7 @@ Markdown으로 직접 작성해주세요.
 
         if response.error:
             response = self.process_single({"prompt": prompt}, engine="engine_2", task_id=task_id)
-            engine_used = "gpt-4o-mini"
+            engine_used = "gpt-5-mini"
         else:
             engine_used = "gemini-3-pro"
 
@@ -289,14 +289,14 @@ Markdown으로 직접 작성해주세요.
 - 불필요한 내부 변경사항은 생략
 """
 
-        # GPT-4o-mini가 이런 구조화 작업에 효율적
+        # GPT-5-mini가 이런 구조화 작업에 효율적
         response = self.process_single({"prompt": prompt}, engine="engine_2", task_id=task_id)
 
         if response.error:
             response = self.process_single({"prompt": prompt}, engine="engine_1", task_id=task_id)
             engine_used = "gemini-3-pro"
         else:
-            engine_used = "gpt-4o-mini"
+            engine_used = "gpt-5-mini"
 
         return DocumentResult(
             doc_type="changelog",
@@ -376,7 +376,7 @@ Markdown으로 직접 작성해주세요.
 
         if response.error:
             response = self.process_single({"prompt": prompt}, engine="engine_2", task_id=task_id)
-            engine_used = "gpt-4o-mini"
+            engine_used = "gpt-5-mini"
         else:
             engine_used = "gemini-3-pro"
 
@@ -438,7 +438,7 @@ Markdown으로 직접 작성해주세요.
 
     def polish_document(self, document: str, style: str = "professional", task_id: str = None) -> DocumentResult:
         """
-        문서 다듬기 (GPT-4o-mini 사용 - 저렴)
+        문서 다듬기 (GPT-5-mini 사용 - 저렴)
 
         Args:
             document: 다듬을 문서
@@ -469,7 +469,7 @@ Markdown으로 직접 작성해주세요.
 다듬어진 문서를 직접 출력해주세요.
 """
 
-        # GPT-4o-mini가 이런 작업에 비용 효율적
+        # GPT-5-mini가 이런 작업에 비용 효율적
         response = self.process_single({"prompt": prompt}, engine="engine_2", task_id=task_id)
 
         return DocumentResult(
@@ -479,7 +479,7 @@ Markdown으로 직접 작성해주세요.
             format="markdown",
             sections=[],
             metadata={"style": style, "original_length": len(document)},
-            engine_used="gpt-4o-mini"
+            engine_used="gpt-5-mini"
         )
 
 
@@ -505,7 +505,7 @@ def get_documentor() -> Documentor:
 def main():
     """테스트"""
     print("\n" + "="*60)
-    print("DOCUMENTOR TEST (Dual Engine: Gemini 3 Pro + GPT-4o-mini)")
+    print("DOCUMENTOR TEST (Dual Engine: Gemini 3 Flash + GPT-5-mini)")
     print("="*60)
 
     documentor = Documentor()

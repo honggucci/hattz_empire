@@ -148,17 +148,44 @@ def delete_session(session_id: str) -> bool:
 # Message CRUD
 # =============================================================================
 
-def add_message(session_id: str, role: str, content: str, agent: Optional[str] = None, project: Optional[str] = None) -> int:
-    """메시지 추가, message_id 반환 + 임베딩 큐에 자동 추가"""
+def add_message(
+    session_id: str,
+    role: str,
+    content: str,
+    agent: Optional[str] = None,
+    project: Optional[str] = None,
+    model_id: Optional[str] = None,
+    task_id: Optional[str] = None,
+    parent_id: Optional[int] = None,
+    engine_role: Optional[str] = None
+) -> int:
+    """
+    메시지 추가, message_id 반환 + 임베딩 큐에 자동 추가
+
+    Args:
+        session_id: 세션 ID
+        role: user/assistant
+        content: 메시지 내용
+        agent: 에이전트 역할 (pm, coder, qa 등)
+        project: 프로젝트명
+        model_id: LLM 모델 ID (gpt-5-mini, claude-opus-4-5 등)
+        task_id: 작업 단위 ID (PM→Coder 호출 추적용)
+        parent_id: 부모 메시지 ID (에이전트 간 연결)
+        engine_role: 듀얼 엔진 역할 (writer/auditor/single)
+    """
     with get_db_connection() as conn:
         cursor = conn.cursor()
 
+        # 다음 sequence 값 계산
+        cursor.execute("SELECT ISNULL(MAX(sequence), 0) + 1 FROM chat_messages WHERE session_id = ?", (session_id,))
+        next_sequence = cursor.fetchone()[0]
+
         # 메시지 추가
         cursor.execute("""
-            INSERT INTO chat_messages (session_id, role, content, agent)
+            INSERT INTO chat_messages (session_id, role, content, agent, model_id, task_id, parent_id, sequence, engine_role)
             OUTPUT INSERTED.id
-            VALUES (?, ?, ?, ?)
-        """, (session_id, role, content, agent))
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (session_id, role, content, agent, model_id, task_id, parent_id, next_sequence, engine_role))
         message_id = cursor.fetchone()[0]
 
         # 세션 updated_at 갱신
@@ -207,16 +234,35 @@ def add_message(session_id: str, role: str, content: str, agent: Optional[str] =
         return message_id
 
 
-def get_messages(session_id: str, limit: int = 100) -> List[Dict[str, Any]]:
-    """세션의 메시지 목록 조회"""
+def get_messages(session_id: str, limit: int = 100, task_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """
+    세션의 메시지 목록 조회
+
+    Args:
+        session_id: 세션 ID
+        limit: 최대 조회 개수
+        task_id: 특정 작업의 메시지만 조회 (선택)
+    """
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("""
-            SELECT TOP (?) id, session_id, role, agent, content, timestamp
-            FROM chat_messages
-            WHERE session_id = ?
-            ORDER BY timestamp ASC
-        """, (limit, session_id))
+
+        if task_id:
+            cursor.execute("""
+                SELECT TOP (?) id, session_id, role, agent, content, timestamp,
+                       model_id, task_id, parent_id, sequence, engine_role
+                FROM chat_messages
+                WHERE session_id = ? AND task_id = ?
+                ORDER BY sequence ASC, timestamp ASC
+            """, (limit, session_id, task_id))
+        else:
+            cursor.execute("""
+                SELECT TOP (?) id, session_id, role, agent, content, timestamp,
+                       model_id, task_id, parent_id, sequence, engine_role
+                FROM chat_messages
+                WHERE session_id = ?
+                ORDER BY sequence ASC, timestamp ASC
+            """, (limit, session_id))
+
         messages = []
         for row in cursor.fetchall():
             messages.append({
@@ -226,6 +272,11 @@ def get_messages(session_id: str, limit: int = 100) -> List[Dict[str, Any]]:
                 "agent": row.agent,
                 "content": row.content,
                 "timestamp": row.timestamp.isoformat() if row.timestamp else None,
+                "model_id": row.model_id,
+                "task_id": row.task_id,
+                "parent_id": row.parent_id,
+                "sequence": row.sequence,
+                "engine_role": row.engine_role,
             })
         return messages
 
@@ -342,21 +393,44 @@ def add_agent_log(
     output_tokens: int = 0,
     latency_ms: int = 0,
     cost_usd: float = 0.0,
-    result: str = "pending"
+    result: str = "pending",
+    project: Optional[str] = None,
+    parent_task_id: Optional[str] = None,
+    engine_role: Optional[str] = None
 ) -> bool:
-    """에이전트 로그 추가"""
+    """
+    에이전트 로그 추가
+
+    Args:
+        log_id: 로그 ID
+        session_id: 세션 ID
+        task_id: 작업 ID
+        role: 에이전트 역할
+        engine: 엔진 타입 (single/dual/router)
+        model: 모델 ID
+        task_type: 작업 유형
+        task_summary: 작업 요약
+        input_tokens: 입력 토큰
+        output_tokens: 출력 토큰
+        latency_ms: 응답 시간
+        cost_usd: 비용
+        result: 결과 상태
+        project: 프로젝트명
+        parent_task_id: PM 태스크 ID (하위 에이전트 연결용)
+        engine_role: 듀얼 엔진 역할 (writer/auditor)
+    """
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
             INSERT INTO agent_logs (
                 id, session_id, task_id, role, engine, model,
                 task_type, task_summary, input_tokens, output_tokens,
-                latency_ms, cost_usd, result
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                latency_ms, cost_usd, result, project, parent_task_id, engine_role
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             log_id, session_id, task_id, role, engine, model,
             task_type, task_summary[:200], input_tokens, output_tokens,
-            latency_ms, cost_usd, result
+            latency_ms, cost_usd, result, project, parent_task_id, engine_role
         ))
         conn.commit()
         return True

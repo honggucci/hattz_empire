@@ -32,7 +32,7 @@ def check_api(provider: str):
             import openai
             client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
             response = client.chat.completions.create(
-                model="gpt-4o-mini",
+                model="gpt-5-mini",
                 max_tokens=10,
                 messages=[{"role": "user", "content": "ping"}]
             )

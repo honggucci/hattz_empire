@@ -185,8 +185,8 @@ MODEL_PRICING = {
     "claude-opus-4-5-20251101": {"input": 0.015, "output": 0.075},
     "claude-sonnet-4-20250514": {"input": 0.003, "output": 0.015},
     "gpt-5.2": {"input": 0.010, "output": 0.030},
-    "gpt-4o-mini": {"input": 0.00015, "output": 0.0006},  # 저렴!
-    "gemini-3-pro-preview": {"input": 0.00125, "output": 0.005},
+    "gpt-5-mini": {"input": 0.0003, "output": 0.00125},  # 저렴!
+    "gemini-3-flash": {"input": 0.0001, "output": 0.0004},  # Flash 저렴!
 }
 
 

@@ -14,7 +14,7 @@ from . import chat_bp
 # Active streaming requests (for abort functionality)
 # stream_id -> is_active
 active_streams: dict[str, bool] = {}
-from src.core.llm_caller import call_agent, process_call_tags, build_call_results_prompt, mock_agent_response
+from src.core.llm_caller import call_agent, process_call_tags, build_call_results_prompt, mock_agent_response, extract_project_from_message
 from src.core.session_state import get_current_session, set_current_session
 from src.services.agent_monitor import get_agent_monitor
 from src.services.fact_checker import fact_check, format_fact_check_result
@@ -46,13 +46,16 @@ def chat():
     if not user_message:
         return jsonify({'error': 'Message required'}), 400
 
+    # [PROJECT: xxx] 태그에서 프로젝트 추출
+    current_project, _ = extract_project_from_message(user_message)
+
     # 세션 관리
     current_session_id = get_current_session()
     if client_session_id:
         current_session_id = client_session_id
         set_current_session(client_session_id)
     elif not current_session_id:
-        current_session_id = db.create_session(agent=agent_role)
+        current_session_id = db.create_session(agent=agent_role, project=current_project)
         set_current_session(current_session_id)
 
     # DB에 사용자 메시지 저장
@@ -101,13 +104,16 @@ def chat_stream():
     if not user_message:
         return jsonify({'error': 'Message required'}), 400
 
+    # [PROJECT: xxx] 태그에서 프로젝트 추출
+    current_project, _ = extract_project_from_message(user_message)
+
     # 세션 관리
     current_session_id = get_current_session()
     if client_session_id:
         current_session_id = client_session_id
         set_current_session(client_session_id)
     elif not current_session_id:
-        current_session_id = db.create_session(agent=agent_role)
+        current_session_id = db.create_session(agent=agent_role, project=current_project)
         set_current_session(current_session_id)
 
     # DB에 사용자 메시지 저장
