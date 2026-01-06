@@ -203,25 +203,52 @@ def call_claude_cli(prompt: str, context: str = "") -> WorkerResult:
 
 
 def extract_verdict(output: str) -> Optional[str]:
-    """출력에서 Verdict 추출"""
+    """
+    LLM 응답에서 JSON 블록을 찾아 파싱하고 verdict/decision 추출
+    JSON 파싱 실패 시 텍스트 기반 fallback
+    """
+    import re
+
+    # 1. JSON 블록 찾기 (```json ... ``` 또는 순수 JSON)
+    json_patterns = [
+        r'```json\s*(\{.*?\})\s*```',  # markdown code block
+        r'(\{[^{}]*"(?:verdict|decision|status)"[^{}]*\})',  # inline JSON with verdict/decision/status
+    ]
+
+    for pattern in json_patterns:
+        match = re.search(pattern, output, re.DOTALL | re.IGNORECASE)
+        if match:
+            try:
+                json_str = match.group(1) if '```' in pattern else match.group(1)
+                data = json.loads(json_str)
+
+                # verdict (Reviewer용) 또는 decision (Security Hawk용) 또는 status (Worker용)
+                verdict = data.get("verdict") or data.get("decision") or data.get("status")
+                if verdict:
+                    verdict = verdict.upper()
+                    # 정규화
+                    if verdict in ["APPROVE", "SHIP", "DONE"]:
+                        return "APPROVE"
+                    elif verdict in ["REJECT", "REVISE", "HOLD", "NEED_INFO"]:
+                        return "REVISE"
+                    return verdict
+
+            except json.JSONDecodeError:
+                continue
+
+    # 2. Fallback: 텍스트 기반 (레거시 지원)
     output_upper = output.upper()
 
-    if "VERDICT:" in output_upper:
-        if "APPROVE" in output_upper:
+    if "VERDICT:" in output_upper or "DECISION:" in output_upper:
+        if "APPROVE" in output_upper or "SHIP" in output_upper:
             return "APPROVE"
-        elif "REJECT" in output_upper or "REVISE" in output_upper:
+        elif "REJECT" in output_upper or "REVISE" in output_upper or "HOLD" in output_upper:
             return "REVISE"
-        elif "HOLD" in output_upper:
-            return "HOLD"
-        elif "SHIP" in output_upper:
-            return "SHIP"
 
     for line in output.split("\n"):
         line = line.strip().upper()
         if line in ["APPROVE", "REJECT", "REVISE", "HOLD", "SHIP"]:
-            return "APPROVE" if line == "APPROVE" else (
-                "REVISE" if line in ["REJECT", "REVISE"] else line
-            )
+            return "APPROVE" if line in ["APPROVE", "SHIP"] else "REVISE"
 
     return None
 
