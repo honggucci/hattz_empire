@@ -190,6 +190,37 @@ hattz_empire/
 
 ## 최근 작업 내역
 
+### 세션 7-2 (2026-01-06) - v2.3 chat.py 통합 완료
+
+chat.py에 Hook Chain, Router Agent, TokenCounter 연동:
+
+1. **chat.py Router Agent 연동**
+   - `auto_route=true` 파라미터로 자동 라우팅 활성화
+   - `auto_route_agent()` 헬퍼 함수 추가
+   - AgentType → 실제 에이전트 role 매핑
+   - CEO 프리픽스(검색/, 코딩/, 분석/)로 강제 라우팅
+
+2. **chat.py Hook Chain 연동**
+   - `run_pre_run_hook()` 헬퍼 함수: 세션 규정 로드
+   - `run_static_gate()` 헬퍼 함수: 0원 1차 검사
+   - SSE 스트림에 `route_info`, `rules_hash`, `token_stats` 전송
+
+3. **TokenCounter 세션 적용**
+   - `_session_counters`: 세션별 TokenCounter 관리
+   - `get_token_counter()`: Lazy initialization
+   - 85% 임계치에서 compaction_needed 플래그 전송
+
+4. **Static Gate 통합**
+   - 하위 에이전트 응답에 Static Gate 적용
+   - Hook session_rules 우선 사용 (Fallback: 기존 방식)
+   - `static_gate_reject` 이벤트로 클라이언트 경고
+
+5. **테스트 추가**
+   - `tests/test_v23_hooks.py`: 단위 테스트 (8/8 통과)
+   - `tests/test_v23_api.py`: API 통합 테스트
+
+---
+
 ### 세션 7 (2026-01-06) - v2.3 Hook Chain 아키텍처
 
 oh-my-opencode 분석 기반 내부통제 시스템 구축:

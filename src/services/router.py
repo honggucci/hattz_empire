@@ -1,11 +1,44 @@
 """
-Hattz Empire - Router Agent
+Hattz Empire - Router Agent (v2.3)
 CEO 완성본 - PM 병목 해소를 위한 자동 태스크 라우팅
 
-기능:
-1. 사용자 요청 분석 → 적절한 에이전트 선택
-2. 키워드 기반 + LLM 기반 하이브리드 라우팅
-3. 복합 태스크 분해 (Multi-Agent Dispatch)
+v2.3 핵심 개선사항:
+1. PM 병목 해소: 단순 요청은 PM 경유 없이 직접 라우팅
+2. 응답 속도 향상: 키워드 기반 빠른 라우팅 (0ms)
+3. CEO 제어권: 프리픽스로 강제 라우팅 가능
+
+라우팅 방식:
+┌──────────────────────────────────────────────────────────────┐
+│  1. CEO 프리픽스 (강제, confidence=1.0)                     │
+│     - "검색/" → Researcher                                  │
+│     - "코딩/" → Coder                                       │
+│     - "분석/" → Excavator                                   │
+│     - "최고/" → PM (VIP 모드)                               │
+├──────────────────────────────────────────────────────────────┤
+│  2. 키워드 기반 (confidence=0.3~0.7)                        │
+│     - "구현", "만들어" → Coder                              │
+│     - "테스트", "검증" → QA                                 │
+│     - "분석", "구조" → Excavator                            │
+│     - "검색", "조사" → Researcher                           │
+├──────────────────────────────────────────────────────────────┤
+│  3. LLM 기반 (fallback, confidence varies)                  │
+│     - 키워드 매칭 실패 시 LLM으로 의도 분석                 │
+│     - 비용 발생하므로 최후 수단                             │
+└──────────────────────────────────────────────────────────────┘
+
+사용 예시:
+```python
+from src.services.router import quick_route, AgentType
+
+decision = quick_route("코딩/ 로그인 기능 만들어줘")
+# → AgentType.CODER, confidence=1.0
+
+decision = quick_route("이 버그 좀 고쳐줘")
+# → AgentType.CODER, confidence=0.4 (키워드 "고쳐")
+```
+
+연동 파일:
+- src/api/chat.py: auto_route_agent()
 """
 from __future__ import annotations
 import re

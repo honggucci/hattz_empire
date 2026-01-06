@@ -1,6 +1,39 @@
 """
-Hattz Empire - Chat API
+Hattz Empire - Chat API (v2.3)
 채팅 관련 API 엔드포인트
+
+v2.3 주요 기능:
+1. Router Agent: 자동 에이전트 선택 (auto_route=true)
+   - CEO 프리픽스: 검색/, 코딩/, 분석/ → 직접 라우팅
+   - 키워드 기반 라우팅: PM 병목 해소
+
+2. Hook Chain: 내부통제 시스템
+   - PreRunHook: 세션 규정 로드 + rules_hash 계산
+   - PreReviewHook: Static Gate (0원 1차 검사)
+   - PostReviewHook: 감사 로그 기록
+
+3. TokenCounter: 토큰 사용량 추적
+   - 75% 경고, 85% 압축 트리거
+   - 세션별 독립 관리
+
+4. Static Gate: 비용 절감
+   - API Key 하드코딩, 무한루프 등 LLM 없이 감지
+   - 위반 시 즉시 REJECT → LLM 호출 비용 절감
+
+데이터 흐름:
+  사용자 입력
+    ↓
+  [Router Agent] auto_route=true 시 에이전트 자동 선택
+    ↓
+  [Pre-Run Hook] 세션 규정 로드 + rules_hash 계산
+    ↓
+  [TokenCounter] 토큰 추적 + 85% 압축 체크
+    ↓
+  LLM 호출 (PM/Coder/QA 등)
+    ↓
+  [Static Gate] 하위 에이전트 응답 검사
+    ↓
+  SSE 스트림으로 클라이언트에 전송
 """
 from flask import request, jsonify, Response
 from flask_login import login_required
@@ -29,6 +62,236 @@ from src.control import (
     get_event_bus,
     get_audit_logger,
 )
+
+# v2.3 Hook Chain System
+from src.hooks.chain import create_default_chain, create_minimal_chain
+from src.hooks.base import HookContext, HookStage
+
+# v2.3 Router Agent
+from src.services.router import quick_route, AgentType
+
+# v2.3 Context Management
+from src.context.counter import TokenCounter
+from src.context.compactor import Compactor
+
+# =============================================================================
+# v2.3 세션별 상태 관리
+# =============================================================================
+
+# Session-level TokenCounters (session_id -> TokenCounter)
+# 각 세션마다 독립적인 토큰 카운터를 유지하여 컨텍스트 윈도우 관리
+_session_counters: dict[str, TokenCounter] = {}
+
+
+def get_token_counter(session_id: str) -> TokenCounter:
+    """
+    세션별 TokenCounter 가져오기 (없으면 생성)
+
+    Args:
+        session_id: 세션 ID
+
+    Returns:
+        TokenCounter: 해당 세션의 토큰 카운터
+
+    Note:
+        - max_tokens=128000 (Claude 3.5 Sonnet 기준)
+        - 75%에서 경고, 85%에서 압축 트리거
+    """
+    if session_id not in _session_counters:
+        _session_counters[session_id] = TokenCounter(
+            max_tokens=128000,
+            warning_threshold=0.75,
+            compaction_threshold=0.85,
+        )
+    return _session_counters[session_id]
+
+
+# =============================================================================
+# v2.3 Hook Chain 헬퍼 함수
+# =============================================================================
+
+def run_pre_run_hook(session_id: str, task: str = "") -> dict:
+    """
+    PRE_RUN Hook 실행 (세션 규정 로드)
+
+    세션 시작 시 config/session_rules/ 디렉토리에서
+    해당 세션의 규정 JSON 파일을 로드하고 rules_hash를 계산합니다.
+
+    Args:
+        session_id: 세션 ID (예: "live-trade-btc-001")
+        task: 수행할 태스크 설명
+
+    Returns:
+        {
+            "success": bool,           # 성공 여부
+            "session_rules": SessionRules or None,  # 로드된 규정
+            "worker_header": str,      # Worker 프롬프트에 주입할 헤더
+            "rules_hash": str,         # 감사 추적용 해시 (SHA256)
+            "error": str or None       # 에러 메시지
+        }
+
+    Note:
+        - 규정 파일이 없으면 dev-default 또는 인메모리 기본값 사용
+        - create_minimal_chain()은 PreRunHook + StopHook만 포함 (비용 최적화)
+    """
+    chain = create_minimal_chain()  # 비용 최적화: Static Gate만
+    context = HookContext(session_id=session_id, task=task)
+
+    result = chain.run_pre_run(context)
+
+    if result.success and result.results.get("PreRunHook"):
+        pre_run_output = result.results["PreRunHook"].output
+        return {
+            "success": True,
+            "session_rules": pre_run_output.get("session_rules"),
+            "worker_header": pre_run_output.get("worker_header", ""),
+            "rules_hash": pre_run_output.get("rules_hash", ""),
+            "error": None
+        }
+
+    return {
+        "success": False,
+        "session_rules": None,
+        "worker_header": "",
+        "rules_hash": "",
+        "error": result.error or "PreRunHook failed"
+    }
+
+
+def run_static_gate(worker_output: str, session_rules, session_id: str) -> dict:
+    """
+    Static Gate 실행 (0원 1차 게이트)
+
+    Worker 출력물을 LLM Reviewer에 보내기 전 정적 검사를 수행합니다.
+    LLM 호출 없이 명백한 위반을 감지하여 비용을 절감합니다.
+
+    검사 항목:
+    - API Key 하드코딩 (OpenAI, AWS, GitHub, Slack, Google)
+    - 무한루프 패턴 (while True without break)
+    - Sleep in API loop
+    - 비밀 정보 노출
+
+    Args:
+        worker_output: 검사할 Worker 출력물 (코드)
+        session_rules: SessionRules 인스턴스 (Pre-Run Hook에서 로드)
+        session_id: 세션 ID (로깅용)
+
+    Returns:
+        {
+            "passed": bool,        # 검사 통과 여부
+            "violations": list,    # 위반 목록 [{key, detail, evidence, line}, ...]
+            "should_abort": bool,  # True면 LLM 호출 없이 즉시 REJECT
+            "message": str         # 결과 메시지
+        }
+
+    Note:
+        - 비용: $0 (LLM 호출 없음)
+        - 위반 시 should_abort=True → LLM Reviewer 호출 스킵
+    """
+    if not worker_output or not session_rules:
+        return {"passed": True, "violations": [], "should_abort": False, "message": "No output to check"}
+
+    from src.hooks.pre_review import PreReviewHook
+
+    context = HookContext(
+        session_id=session_id,
+        worker_output=worker_output,
+        metadata={"session_rules": session_rules}
+    )
+
+    hook = PreReviewHook(session_rules=session_rules)
+    result = hook.execute(context)
+
+    if result.should_abort:
+        return {
+            "passed": False,
+            "violations": result.output.get("violations", []),
+            "should_abort": True,
+            "message": result.abort_reason
+        }
+
+    return {
+        "passed": True,
+        "violations": [],
+        "should_abort": False,
+        "message": "Static check passed"
+    }
+
+
+# =============================================================================
+# v2.3 Router Agent 헬퍼 함수
+# =============================================================================
+
+def auto_route_agent(user_message: str, default_agent: str = "pm") -> tuple[str, dict]:
+    """
+    Router Agent로 자동 에이전트 선택
+
+    사용자 요청을 분석하여 가장 적합한 에이전트를 자동으로 선택합니다.
+    PM 병목을 해소하고 응답 속도를 향상시킵니다.
+
+    라우팅 방식:
+    1. CEO 프리픽스 (강제 라우팅, confidence=1.0)
+       - "검색/" → Researcher
+       - "코딩/" → Coder
+       - "분석/" → Excavator
+       - "최고/" → PM (VIP 모드)
+
+    2. 키워드 기반 (confidence=0.3~0.7)
+       - "구현", "만들어", "추가" → Coder
+       - "테스트", "검증" → QA
+       - "분석", "구조" → Excavator
+       - etc.
+
+    Args:
+        user_message: 사용자 입력 메시지
+        default_agent: 기본 에이전트 (매칭 실패 시)
+
+    Returns:
+        (selected_agent: str, route_info: dict)
+        - selected_agent: 선택된 에이전트 role
+        - route_info: {
+            "routed": bool,           # 라우팅 성공 여부
+            "selected_agent": str,    # 선택된 에이전트
+            "confidence": float,      # 신뢰도 (0.0~1.0)
+            "reason": str,            # 선택 이유
+            "reframed_task": str,     # 재구성된 태스크
+          }
+
+    Note:
+        - confidence >= 0.7 일 때만 실제 라우팅 적용
+        - 그 외에는 default_agent(PM) 유지
+    """
+    try:
+        decision = quick_route(user_message)
+
+        # AgentType → 실제 에이전트 role 매핑
+        agent_mapping = {
+            AgentType.PM: "pm",
+            AgentType.CODER: "coder",
+            AgentType.EXCAVATOR: "excavator",
+            AgentType.QA: "qa",
+            AgentType.RESEARCHER: "researcher",
+            AgentType.STRATEGIST: "strategist",
+            AgentType.ANALYST: "analyst",
+        }
+
+        selected = agent_mapping.get(decision.agent, default_agent)
+
+        route_info = {
+            "routed": True,
+            "selected_agent": selected,
+            "confidence": decision.confidence,
+            "reason": decision.reason,
+            "reframed_task": decision.reframed_task,
+        }
+
+        print(f"[Router] {user_message[:50]}... → {selected} (confidence: {decision.confidence:.2f})")
+
+        return selected, route_info
+
+    except Exception as e:
+        print(f"[Router] Error: {e}, falling back to {default_agent}")
+        return default_agent, {"routed": False, "error": str(e)}
 
 
 @chat_bp.route('/chat', methods=['POST'])
@@ -103,7 +366,13 @@ def chat():
 @chat_bp.route('/chat/stream', methods=['POST'])
 def chat_stream():
     """
-    채팅 API (streaming) - 하이브리드 모드
+    채팅 API (streaming) - 하이브리드 모드 + v2.3 Hook Chain
+
+    v2.3 추가:
+    1. Router Agent로 자동 에이전트 선택 (auto_route=true)
+    2. Pre-Run Hook으로 세션 규정 로드
+    3. TokenCounter로 토큰 사용량 추적 (85% 압축 트리거)
+    4. Static Gate로 0원 1차 검사
 
     하이브리드 모드:
     1. 스트리밍 시작 전 standby 태스크 생성 (LLM 호출 안 함)
@@ -117,12 +386,21 @@ def chat_stream():
     agent_role = data.get('agent', 'pm')
     use_mock = data.get('mock', False)
     client_session_id = data.get('session_id')
+    auto_route = data.get('auto_route', False)  # v2.3: 자동 라우팅 활성화
 
     if not user_message:
         return jsonify({'error': 'Message required'}), 400
 
     # [PROJECT: xxx] 태그에서 프로젝트 추출
     current_project, _ = extract_project_from_message(user_message)
+
+    # ===== v2.3 Router Agent =====
+    route_info = None
+    if auto_route and agent_role == 'pm':
+        # PM으로 요청 시에만 자동 라우팅 (다른 에이전트 지정 시 무시)
+        routed_agent, route_info = auto_route_agent(user_message, agent_role)
+        if route_info.get("routed") and route_info.get("confidence", 0) >= 0.7:
+            agent_role = routed_agent
 
     # 세션 관리
     current_session_id = get_current_session()
@@ -132,6 +410,29 @@ def chat_stream():
     elif not current_session_id:
         current_session_id = db.create_session(agent=agent_role, project=current_project)
         set_current_session(current_session_id)
+
+    # ===== v2.3 TokenCounter =====
+    token_counter = get_token_counter(current_session_id)
+    token_counter.add('user', user_message)
+
+    # 85% 임계치 체크
+    compaction_needed = token_counter.should_compact
+    if compaction_needed:
+        print(f"[TokenCounter] ⚠️ Session {current_session_id} at {token_counter.usage_ratio:.1%} - compaction needed")
+
+    # ===== v2.3 Pre-Run Hook =====
+    session_rules = None
+    rules_hash = ""
+    try:
+        hook_result = run_pre_run_hook(current_session_id, user_message)
+        if hook_result["success"]:
+            session_rules = hook_result["session_rules"]
+            rules_hash = hook_result["rules_hash"]
+            print(f"[Hook] Pre-run OK: rules_hash={rules_hash[:16]}...")
+        else:
+            print(f"[Hook] Pre-run failed: {hook_result['error']}")
+    except Exception as e:
+        print(f"[Hook] Pre-run error: {e}")
 
     # DB에 사용자 메시지 저장
     db.add_message(current_session_id, 'user', user_message, agent_role)
@@ -152,11 +453,41 @@ def chat_stream():
     # 스트리밍 완료 여부 추적
     streaming_completed = False
 
+    # v2.3 Hook 데이터 (generate 내부에서 사용)
+    hook_data = {
+        "session_rules": session_rules,
+        "rules_hash": rules_hash,
+        "route_info": route_info,
+        "token_counter": token_counter,
+        "compaction_needed": compaction_needed,
+    }
+
     def generate():
         try:
             # 첫 번째로 세션 ID와 스트림 ID 전송
             yield f"data: {json.dumps({'session_id': session_id, 'stream_id': stream_id}, ensure_ascii=False)}\n\n"
-            yield f"data: {json.dumps({'stage': 'thinking', 'agent': agent_role}, ensure_ascii=False)}\n\n"
+
+            # ===== v2.3 메타데이터 전송 =====
+            v23_meta = {
+                'stage': 'thinking',
+                'agent': agent_role,
+            }
+            # Router 정보 (자동 라우팅 시)
+            if hook_data.get("route_info"):
+                v23_meta['route_info'] = hook_data["route_info"]
+            # Rules hash (감사 추적용)
+            if hook_data.get("rules_hash"):
+                v23_meta['rules_hash'] = hook_data["rules_hash"][:16] + "..."
+            # Token stats
+            tc = hook_data.get("token_counter")
+            if tc:
+                v23_meta['token_stats'] = {
+                    'usage_ratio': round(tc.usage_ratio, 3),
+                    'total_tokens': tc.total_tokens,
+                    'compaction_needed': hook_data.get("compaction_needed", False),
+                }
+
+            yield f"data: {json.dumps(v23_meta, ensure_ascii=False)}\n\n"
 
             # SSE broadcast: thinking stage (cross-device sync)
             emit_stage_change(session_id, 'thinking', agent_role)
@@ -172,6 +503,11 @@ def chat_stream():
             if not active_streams.get(stream_id, False):
                 yield f"data: {json.dumps({'aborted': True, 'message': 'LLM 호출 후 중단됨'}, ensure_ascii=False)}\n\n"
                 return
+
+            # ===== v2.3 TokenCounter: 응답 토큰 추적 =====
+            tc = hook_data.get("token_counter")
+            if tc:
+                tc.add('assistant', response)
 
             # 모델 정보 전송
             if model_meta:
@@ -276,48 +612,85 @@ def chat_stream():
                         sub_response, sub_meta = call_agent(sub_message, sub_agent, auto_execute=True, use_translation=False, return_meta=True)
 
                         # =====================================================
-                        # [Control] 정적 검사 (Constitution + Session Rules)
+                        # [v2.3 Hook] Static Gate (0원 1차 게이트)
                         # =====================================================
+                        static_gate_result = None
                         try:
-                            rules = get_rules_for_session(session_id)
-                            checker = StaticChecker(rules)
-                            check_result = checker.check(sub_response, file_type="python")
+                            # Pre-Run Hook에서 로드한 session_rules 사용
+                            hook_session_rules = hook_data.get("session_rules")
+                            if hook_session_rules:
+                                static_gate_result = run_static_gate(
+                                    worker_output=sub_response,
+                                    session_rules=hook_session_rules,
+                                    session_id=session_id
+                                )
 
-                            event_bus = get_event_bus()
-                            audit_logger = get_audit_logger()
+                                # EventBus 발행
+                                event_bus = get_event_bus()
+                                event_bus.emit_static_check_result(
+                                    session_id=session_id,
+                                    passed=static_gate_result["passed"],
+                                    violations_count=len(static_gate_result.get("violations", [])),
+                                    has_critical=static_gate_result.get("should_abort", False),
+                                )
 
-                            # EventBus로 검토 이벤트 발행
-                            event_bus.emit_static_check_result(
-                                session_id=session_id,
-                                passed=check_result.passed,
-                                violations_count=len(check_result.violations),
-                                has_critical=check_result.has_critical(),
-                            )
+                                # Audit 로깅
+                                audit_logger = get_audit_logger()
+                                audit_logger.log_event(
+                                    event_type="static_gate",
+                                    session_id=session_id,
+                                    data={
+                                        "worker_agent": sub_agent,
+                                        "passed": static_gate_result["passed"],
+                                        "violations": static_gate_result.get("violations", []),
+                                        "rules_hash": hook_data.get("rules_hash", ""),
+                                    }
+                                )
 
-                            # Audit 로깅
-                            audit_logger.log_static_check(
-                                rules=rules,
-                                static_result=check_result,
-                                worker_agent=sub_agent,
-                                original_request=sub_message[:200],
-                            )
-
-                            if not check_result.passed:
-                                # 위반 발견 - 클라이언트에 경고 전송
-                                violations_summary = [
-                                    {"rule": v.rule_key, "severity": v.severity.value, "message": v.message}
-                                    for v in check_result.violations[:5]  # 최대 5개
-                                ]
-                                yield f"data: {json.dumps({'stage': 'control_warning', 'sub_agent': sub_agent, 'violations': violations_summary, 'passed': False}, ensure_ascii=False)}\n\n"
-
-                                # Critical 위반은 응답에 경고 추가
-                                if check_result.has_critical():
-                                    sub_response = f"⚠️ [CONTROL WARNING] Constitution 위반 감지됨!\n\n{sub_response}"
-                                    print(f"[Control] ⚠️ CRITICAL violation in {sub_agent} response!")
+                                if not static_gate_result["passed"]:
+                                    # 위반 발견 - 클라이언트에 경고 전송
+                                    yield f"data: {json.dumps({'stage': 'static_gate_reject', 'sub_agent': sub_agent, 'violations': static_gate_result.get('violations', [])[:5], 'passed': False, 'message': static_gate_result.get('message', 'Static Gate REJECT')}, ensure_ascii=False)}\n\n"
+                                    print(f"[StaticGate] ⚠️ REJECT: {sub_agent} - {static_gate_result.get('message')}")
+                                else:
+                                    print(f"[StaticGate] ✅ PASS: {sub_agent}")
                             else:
-                                print(f"[Control] ✅ {sub_agent} response passed static check")
+                                # Fallback: 기존 방식
+                                rules = get_rules_for_session(session_id)
+                                checker = StaticChecker(rules)
+                                check_result = checker.check(sub_response, file_type="python")
+
+                                event_bus = get_event_bus()
+                                audit_logger = get_audit_logger()
+
+                                event_bus.emit_static_check_result(
+                                    session_id=session_id,
+                                    passed=check_result.passed,
+                                    violations_count=len(check_result.violations),
+                                    has_critical=check_result.has_critical(),
+                                )
+
+                                audit_logger.log_static_check(
+                                    rules=rules,
+                                    static_result=check_result,
+                                    worker_agent=sub_agent,
+                                    original_request=sub_message[:200],
+                                )
+
+                                if not check_result.passed:
+                                    violations_summary = [
+                                        {"rule": v.rule_key, "severity": v.severity.value, "message": v.message}
+                                        for v in check_result.violations[:5]
+                                    ]
+                                    yield f"data: {json.dumps({'stage': 'control_warning', 'sub_agent': sub_agent, 'violations': violations_summary, 'passed': False}, ensure_ascii=False)}\n\n"
+
+                                    # Critical 위반은 응답에 경고 추가
+                                    if check_result.has_critical():
+                                        sub_response = f"⚠️ [CONTROL WARNING] Constitution 위반 감지됨!\n\n{sub_response}"
+                                        print(f"[Control] ⚠️ CRITICAL violation in {sub_agent} response!")
+                                else:
+                                    print(f"[Control] ✅ {sub_agent} response passed static check")
                         except Exception as ctrl_err:
-                            print(f"[Control] Error during static check: {ctrl_err}")
+                            print(f"[StaticGate/Control] Error during check: {ctrl_err}")
 
                         # 모니터에 완료 등록
                         monitor.complete_task(
