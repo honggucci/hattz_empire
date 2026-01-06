@@ -57,11 +57,37 @@ import src.services.executor as executor
 
 # Control Module (Session Rules System)
 from src.control import (
-    get_rules_for_session,
     StaticChecker,
-    get_event_bus,
-    get_audit_logger,
+    RulesStore,
+    AuditLogger,
+    EventBus,
 )
+
+# Singleton instances for control module
+_rules_store = RulesStore()
+_audit_logger = AuditLogger()
+_event_bus = EventBus()
+
+
+def get_rules_for_session(session_id: str):
+    """세션별 규정 로드 (fallback: dev-default)"""
+    try:
+        return _rules_store.load(session_id)
+    except FileNotFoundError:
+        try:
+            return _rules_store.load("dev-default")
+        except FileNotFoundError:
+            return None
+
+
+def get_event_bus() -> EventBus:
+    """싱글톤 EventBus 반환"""
+    return _event_bus
+
+
+def get_audit_logger() -> AuditLogger:
+    """싱글톤 AuditLogger 반환"""
+    return _audit_logger
 
 # v2.3 Hook Chain System
 from src.hooks.chain import create_default_chain, create_minimal_chain

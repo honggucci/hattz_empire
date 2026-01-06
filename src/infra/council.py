@@ -1,6 +1,11 @@
 """
-Hattz Empire - Persona Council System
+Hattz Empire - Persona Council System (v2.3.1)
 다중 페르소나 위원회 - 같은 모델, 다른 성격
+
+v2.3.1 개선사항:
+1. DB 저장: 모든 페르소나 판정을 chat_messages에 저장 (is_internal=True)
+2. 임베딩: 판정 내용 자동 임베딩 (RAG 검색 가능)
+3. 메타데이터: project, model_id, persona_id 모두 기록
 
 "혼자 결정하면 좆된다"
 """
@@ -11,6 +16,9 @@ from typing import Dict, List, Optional, Callable, Any
 from dataclasses import dataclass, field
 from enum import Enum
 from statistics import mean, stdev
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class Verdict(Enum):
@@ -331,19 +339,110 @@ class PersonaCouncil:
             print("CEO 확인 필요")
     """
 
-    def __init__(self, llm_caller: Optional[Callable] = None):
+    def __init__(self, llm_caller: Optional[Callable] = None, session_id: Optional[str] = None, project: Optional[str] = None):
         """
         Args:
             llm_caller: LLM 호출 함수
                         async def llm_caller(system_prompt, user_message, temperature, persona_id, council_type) -> str
+            session_id: DB 저장용 세션 ID
+            project: 프로젝트명 (임베딩 필터링용)
         """
         self.llm_caller = llm_caller
+        self.session_id = session_id
+        self.project = project or "hattz_empire"
         self.history: List[CouncilVerdict] = []
         self.current_council_type: Optional[str] = None  # 현재 진행 중인 위원회 유형
 
     def set_llm_caller(self, caller: Callable):
         """LLM 호출 함수 설정"""
         self.llm_caller = caller
+
+    def set_session_context(self, session_id: str, project: Optional[str] = None):
+        """세션 컨텍스트 설정 (DB 저장용)"""
+        self.session_id = session_id
+        if project:
+            self.project = project
+
+    def _save_persona_judgment_to_db(
+        self,
+        persona: PersonaConfig,
+        judge_score: JudgeScore,
+        council_type: str,
+        model_id: str = "council-persona"
+    ):
+        """
+        개별 페르소나 판정을 DB에 저장 (is_internal=True)
+
+        저장 형식:
+        - agent: "council_{persona_id}" (예: council_skeptic)
+        - model_id: 사용된 LLM 모델
+        - is_internal: True (웹에 표시 안 함)
+        """
+        if not self.session_id:
+            logger.debug("No session_id set, skipping DB save")
+            return
+
+        try:
+            import src.services.database as db
+
+            # 페르소나 판정 내용을 구조화된 텍스트로 변환
+            content = f"""[Council {council_type.upper()}] {persona.icon} {persona.name}
+점수: {judge_score.score}/10
+판단: {judge_score.reasoning}
+우려: {', '.join(judge_score.concerns) if judge_score.concerns else '없음'}
+긍정: {', '.join(judge_score.approvals) if judge_score.approvals else '없음'}"""
+
+            db.add_message(
+                session_id=self.session_id,
+                role="assistant",
+                content=content,
+                agent=f"council_{persona.id}",  # council_skeptic, council_pragmatist 등
+                project=self.project,
+                model_id=model_id,
+                is_internal=True  # 웹 UI에 표시 안 함, DB/임베딩만
+            )
+            logger.debug(f"Saved persona judgment: {persona.id} -> DB")
+
+        except Exception as e:
+            logger.warning(f"Failed to save persona judgment to DB: {e}")
+
+    def _save_council_verdict_to_db(self, result: CouncilVerdict, model_id: str = "council-verdict"):
+        """
+        위원회 최종 판정을 DB에 저장
+        """
+        if not self.session_id:
+            return
+
+        try:
+            import src.services.database as db
+
+            # 최종 판정 요약
+            content = f"""[Council Verdict] {result.council_type.upper()}
+판정: {result.verdict.value.upper()}
+평균점수: {result.average_score}/10 (편차: {result.score_std})
+CEO 검토: {'필요' if result.requires_ceo else '불필요'}
+
+{result.summary}
+
+심사위원:
+""" + "\n".join([
+                f"- {j.icon} {j.persona_name}: {j.score}/10"
+                for j in result.judges
+            ])
+
+            db.add_message(
+                session_id=self.session_id,
+                role="assistant",
+                content=content,
+                agent=f"council_{result.council_type}",
+                project=self.project,
+                model_id=model_id,
+                is_internal=True
+            )
+            logger.debug(f"Saved council verdict: {result.council_type} -> DB")
+
+        except Exception as e:
+            logger.warning(f"Failed to save council verdict to DB: {e}")
 
     async def _call_persona(
         self,
@@ -415,7 +514,7 @@ class PersonaCouncil:
                 "approvals": [f"{persona.name} 긍정적 평가"]
             }
 
-        return JudgeScore(
+        judge_score = JudgeScore(
             persona_id=persona.id,
             persona_name=persona.name,
             icon=persona.icon,
@@ -424,6 +523,16 @@ class PersonaCouncil:
             concerns=data.get("concerns", []),
             approvals=data.get("approvals", [])
         )
+
+        # v2.3.1: 개별 페르소나 판정을 DB에 저장 (is_internal=True)
+        self._save_persona_judgment_to_db(
+            persona=persona,
+            judge_score=judge_score,
+            council_type=council_type or self.current_council_type or "unknown",
+            model_id=f"council-{persona.id}"
+        )
+
+        return judge_score
 
     def _determine_verdict(
         self,
@@ -529,6 +638,9 @@ class PersonaCouncil:
             requires_ceo=requires_ceo,
         )
 
+        # v2.3.1: 최종 판정을 DB에 저장
+        self._save_council_verdict_to_db(result, model_id=f"council-{council_type}-verdict")
+
         self.history.append(result)
         return result
 
@@ -553,11 +665,21 @@ class PersonaCouncil:
 _council: Optional[PersonaCouncil] = None
 
 
-def get_council() -> PersonaCouncil:
-    """Council 싱글톤"""
+def get_council(session_id: Optional[str] = None, project: Optional[str] = None) -> PersonaCouncil:
+    """
+    Council 싱글톤
+
+    Args:
+        session_id: DB 저장용 세션 ID (설정 시 위원회 판정이 DB에 저장됨)
+        project: 프로젝트명 (임베딩 필터링용)
+    """
     global _council
     if _council is None:
-        _council = PersonaCouncil()
+        _council = PersonaCouncil(session_id=session_id, project=project)
+    else:
+        # 기존 인스턴스에 세션 컨텍스트 업데이트
+        if session_id:
+            _council.set_session_context(session_id, project)
     return _council
 
 

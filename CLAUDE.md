@@ -190,6 +190,32 @@ hattz_empire/
 
 ## 최근 작업 내역
 
+### 세션 7-3 (2026-01-06) - v2.3.1 위원회 DB 저장 + 임베딩
+
+위원회 판정을 DB에 저장하고 임베딩되도록 개선:
+
+1. **council.py 업그레이드**
+   - `_save_persona_judgment_to_db()`: 개별 페르소나 판정 저장
+   - `_save_council_verdict_to_db()`: 최종 판정 저장
+   - `set_session_context()`: 세션/프로젝트 컨텍스트 설정
+   - `get_council(session_id, project)`: 싱글톤에 세션 전달
+
+2. **저장 구조**
+   - `agent`: `council_skeptic`, `council_pragmatist` 등
+   - `model_id`: `council-skeptic`, `council-code-verdict` 등
+   - `is_internal`: True (웹에 안 보임, DB/임베딩만)
+
+3. **council_api.py 업그레이드**
+   - `session_id`, `project` 파라미터 추가
+   - API 호출 시 자동 DB 저장
+
+4. **웹 출력 vs DB 분리**
+   - 웹: `is_internal=False`만 표시 (요약된 결과)
+   - DB: 전체 저장 (에이전트/위원회 대화 포함)
+   - 임베딩 큐: 10자 이상 자동 임베딩 → RAG 검색 가능
+
+---
+
 ### 세션 7-2 (2026-01-06) - v2.3 chat.py 통합 완료
 
 chat.py에 Hook Chain, Router Agent, TokenCounter 연동:

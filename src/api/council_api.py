@@ -1,6 +1,10 @@
 """
-Hattz Empire - Council API
+Hattz Empire - Council API (v2.3.1)
 Persona Council 위원회 API
+
+v2.3.1: 위원회 판정을 DB에 저장하고 임베딩
+- session_id, project 파라미터로 저장 컨텍스트 설정
+- 모든 페르소나 판정 + 최종 verdict가 DB에 기록됨
 """
 from flask import request, jsonify
 
@@ -46,13 +50,17 @@ def convene():
     {
         "council_type": "code",
         "content": "검토할 내용",
-        "context": "추가 컨텍스트 (선택)"
+        "context": "추가 컨텍스트 (선택)",
+        "session_id": "세션 ID (선택, DB 저장용)",
+        "project": "프로젝트명 (선택, 임베딩 필터링용)"
     }
     """
     data = request.json
     council_type = data.get('council_type', 'code')
     content = data.get('content', '')
     context = data.get('context', '')
+    session_id = data.get('session_id')  # v2.3.1: DB 저장용
+    project = data.get('project')  # v2.3.1: 임베딩 필터링용
 
     if not content:
         return jsonify({'error': 'content required'}), 400
@@ -60,7 +68,8 @@ def convene():
     if council_type not in COUNCIL_TYPES:
         return jsonify({'error': f'Unknown council type: {council_type}'}), 400
 
-    council = get_council()
+    # v2.3.1: session_id 전달 시 DB에 저장됨
+    council = get_council(session_id=session_id, project=project)
     verdict = council.convene_sync(council_type, content, context)
 
     return jsonify({
