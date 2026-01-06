@@ -1,0 +1,25 @@
+{
+  "session_id": "dev-default",
+  "mode": "dev",
+  "risk_profile": "normal",
+  "rule_version": "v1",
+  "rules": {
+    "trading": {
+      "market_order": "forbid",
+      "max_order_usd": null,
+      "max_leverage": 1
+    },
+    "code": {
+      "forbid_sleep_in_api_loop": true,
+      "require_rate_limit_guard": false,
+      "secrets_hardcoding": "forbid",
+      "forbid_infinite_loop": true
+    },
+    "quality": {
+      "allow_skip_tests": true,
+      "max_files_changed": 20,
+      "require_diff_summary": false
+    }
+  },
+  "overrides": []
+}

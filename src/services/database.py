@@ -76,23 +76,43 @@ def get_session(session_id: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def list_sessions(limit: int = 50, include_deleted: bool = False) -> List[Dict[str, Any]]:
-    """세션 목록 조회 (최근 순, 삭제된 세션 제외)"""
+def list_sessions(limit: int = 50, include_deleted: bool = False, allowed_projects: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+    """
+    세션 목록 조회 (최근 순, 삭제된 세션 제외)
+    
+    Args:
+        limit: 최대 조회 개수
+        include_deleted: 삭제된 세션 포함 여부
+        allowed_projects: 접근 가능한 프로젝트 목록 (None이면 모든 프로젝트, RLS용)
+    """
     with get_db_connection() as conn:
         cursor = conn.cursor()
+        
+        # 프로젝트 필터링 조건 구성 (RLS)
+        project_filter = ""
+        params = [limit]
+        
+        if allowed_projects is not None:
+            if not allowed_projects:
+                return []  # 권한 없음
+            placeholders = ", ".join(["?" for _ in allowed_projects])
+            project_filter = f" AND project IN ({placeholders})"
+            params.extend(allowed_projects)
+        
         if include_deleted:
-            cursor.execute("""
+            cursor.execute(f"""
                 SELECT TOP (?) id, name, project, agent, created_at, updated_at, is_deleted, deleted_at
                 FROM chat_sessions
+                WHERE 1=1 {project_filter}
                 ORDER BY updated_at DESC
-            """, (limit,))
+            """, params)
         else:
-            cursor.execute("""
+            cursor.execute(f"""
                 SELECT TOP (?) id, name, project, agent, created_at, updated_at
                 FROM chat_sessions
-                WHERE is_deleted = 0 OR is_deleted IS NULL
+                WHERE (is_deleted = 0 OR is_deleted IS NULL) {project_filter}
                 ORDER BY updated_at DESC
-            """, (limit,))
+            """, params)
         sessions = []
         for row in cursor.fetchall():
             sessions.append({
@@ -159,7 +179,8 @@ def add_message(
     model_id: Optional[str] = None,
     task_id: Optional[str] = None,
     parent_id: Optional[int] = None,
-    engine_role: Optional[str] = None
+    engine_role: Optional[str] = None,
+    is_internal: bool = False
 ) -> int:
     """
     메시지 추가, message_id 반환 + 임베딩 큐에 자동 추가
@@ -174,6 +195,7 @@ def add_message(
         task_id: 작업 단위 ID (PM→Coder 호출 추적용)
         parent_id: 부모 메시지 ID (에이전트 간 연결)
         engine_role: 듀얼 엔진 역할 (writer/auditor/single)
+        is_internal: 내부 메시지 여부 (True면 웹 UI에 표시 안 함, DB/임베딩만)
     """
     with get_db_connection() as conn:
         cursor = conn.cursor()
@@ -182,12 +204,12 @@ def add_message(
         cursor.execute("SELECT ISNULL(MAX(sequence), 0) + 1 FROM chat_messages WHERE session_id = ?", (session_id,))
         next_sequence = cursor.fetchone()[0]
 
-        # 메시지 추가
+        # 메시지 추가 (is_internal 컬럼 포함)
         cursor.execute("""
-            INSERT INTO chat_messages (session_id, role, content, agent, model_id, task_id, parent_id, sequence, engine_role)
+            INSERT INTO chat_messages (session_id, role, content, agent, model_id, task_id, parent_id, sequence, engine_role, is_internal)
             OUTPUT INSERTED.id
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (session_id, role, content, agent, model_id, task_id, parent_id, next_sequence, engine_role))
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (session_id, role, content, agent, model_id, task_id, parent_id, next_sequence, engine_role, 1 if is_internal else 0))
         message_id = cursor.fetchone()[0]
 
         # 세션 updated_at 갱신
@@ -236,7 +258,7 @@ def add_message(
         return message_id
 
 
-def get_messages(session_id: str, limit: int = 100, task_id: Optional[str] = None) -> List[Dict[str, Any]]:
+def get_messages(session_id: str, limit: int = 100, task_id: Optional[str] = None, include_internal: bool = False) -> List[Dict[str, Any]]:
     """
     세션의 메시지 목록 조회
 
@@ -244,24 +266,28 @@ def get_messages(session_id: str, limit: int = 100, task_id: Optional[str] = Non
         session_id: 세션 ID
         limit: 최대 조회 개수
         task_id: 특정 작업의 메시지만 조회 (선택)
+        include_internal: 내부 메시지 포함 여부 (기본 False = 웹 UI용)
     """
     with get_db_connection() as conn:
         cursor = conn.cursor()
 
+        # 내부 메시지 필터링 조건
+        internal_filter = "" if include_internal else " AND (is_internal = 0 OR is_internal IS NULL)"
+
         if task_id:
-            cursor.execute("""
+            cursor.execute(f"""
                 SELECT TOP (?) id, session_id, role, agent, content, timestamp,
-                       model_id, task_id, parent_id, sequence, engine_role
+                       model_id, task_id, parent_id, sequence, engine_role, is_internal
                 FROM chat_messages
-                WHERE session_id = ? AND task_id = ?
+                WHERE session_id = ? AND task_id = ?{internal_filter}
                 ORDER BY sequence ASC, timestamp ASC
             """, (limit, session_id, task_id))
         else:
-            cursor.execute("""
+            cursor.execute(f"""
                 SELECT TOP (?) id, session_id, role, agent, content, timestamp,
-                       model_id, task_id, parent_id, sequence, engine_role
+                       model_id, task_id, parent_id, sequence, engine_role, is_internal
                 FROM chat_messages
-                WHERE session_id = ?
+                WHERE session_id = ?{internal_filter}
                 ORDER BY sequence ASC, timestamp ASC
             """, (limit, session_id))
 
@@ -279,6 +305,7 @@ def get_messages(session_id: str, limit: int = 100, task_id: Optional[str] = Non
                 "parent_id": row.parent_id,
                 "sequence": row.sequence,
                 "engine_role": row.engine_role,
+                "is_internal": bool(row.is_internal) if hasattr(row, 'is_internal') else False,
             })
         return messages
 
@@ -335,6 +362,32 @@ def run_soft_delete_migration() -> Dict[str, Any]:
         # 기존 NULL 데이터 업데이트
         cursor.execute("UPDATE chat_sessions SET is_deleted = 0 WHERE is_deleted IS NULL")
         conn.commit()
+
+    results["success"] = len(results["errors"]) == 0
+    return results
+
+
+def run_is_internal_migration() -> Dict[str, Any]:
+    """chat_messages에 is_internal 컬럼 추가 (내부 에이전트 대화 필터링용)"""
+    results = {"added_columns": [], "errors": []}
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+
+        # is_internal 컬럼 확인 및 추가
+        cursor.execute("""
+            SELECT 1 FROM sys.columns
+            WHERE object_id = OBJECT_ID('chat_messages')
+            AND name = 'is_internal'
+        """)
+        if not cursor.fetchone():
+            try:
+                cursor.execute("ALTER TABLE chat_messages ADD is_internal BIT DEFAULT 0 NOT NULL")
+                conn.commit()
+                results["added_columns"].append("is_internal")
+                print("[Migration] Added is_internal column to chat_messages")
+            except Exception as e:
+                results["errors"].append(f"is_internal: {str(e)}")
 
     results["success"] = len(results["errors"]) == 0
     return results

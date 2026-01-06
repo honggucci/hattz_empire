@@ -1,0 +1,25 @@
+{
+  "session_id": "backtest-fast",
+  "mode": "backtest",
+  "risk_profile": "fast",
+  "rule_version": "v1",
+  "rules": {
+    "trading": {
+      "market_order": "allow",
+      "max_order_usd": null,
+      "max_leverage": 10
+    },
+    "code": {
+      "forbid_sleep_in_api_loop": false,
+      "require_rate_limit_guard": false,
+      "secrets_hardcoding": "forbid",
+      "forbid_infinite_loop": false
+    },
+    "quality": {
+      "allow_skip_tests": true,
+      "max_files_changed": 50,
+      "require_diff_summary": false
+    }
+  },
+  "overrides": []
+}

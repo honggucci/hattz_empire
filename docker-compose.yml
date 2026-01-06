@@ -1,11 +1,12 @@
-# Hattz Empire v2.2 - Docker Compose
-# Worker-Reviewer Pair Architecture
+# Hattz Empire v2.2.4 - Docker Compose (Workers Only)
+# Flask/ngrok은 로컬에서 실행, Claude CLI 워커들만 Docker로 실행
 #
 # 핵심 설계:
-# 1. DB는 web만 소유 (워커들은 HTTP로 /jobs/pull, /jobs/push)
-# 2. coder-worker만 repo 전체 RW, QA는 tests만 RW, 나머지 RO
-# 3. Claude CLI 상태는 named volume으로 영속화
-# 4. ANTHROPIC_API_KEY="" = 구독(Pro/Max)으로 CLI 실행
+# 1. Flask는 로컬에서 실행 (python app.py)
+# 2. ngrok도 로컬에서 실행 (ngrok http 5000 --domain=...)
+# 3. Claude CLI 워커들만 Docker로 실행
+# 4. 워커들은 host.docker.internal:5000으로 로컬 Flask에 접근
+# 5. ANTHROPIC_API_KEY="" = 구독(Pro/Max)으로 CLI 실행
 #
 # 실행: docker-compose up -d
 # 종료: docker-compose down
@@ -14,96 +15,67 @@
 name: hattz-empire-v2-2
 
 volumes:
-  db_data:        # SQLite DB 영속화
   claude_state:   # /root/.claude 영속화 (로그인/세션/설정)
-  ngrok_state:    # ngrok config/cache
 
 networks:
   hattz:
     driver: bridge
 
-services:
-  # ===========================================================================
-  # WEB (Control Tower) - DB 소유자
-  # ===========================================================================
-  web:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.web
-    container_name: hattz_web
-    env_file: .env
-    environment:
-      - ROLE=SERVER
-      - FLASK_ENV=production
-      - FLASK_SECRET_KEY=${FLASK_SECRET_KEY:-hattz-empire-docker-secret}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
-      - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN}
-      - NGROK_DOMAIN=${NGROK_DOMAIN:-caitlyn-supercivilized-intrudingly.ngrok-free.app}
-    ports:
-      - "5000:5000"
-      - "4040:4040"
-    volumes:
-      - ./:/app:rw
-      - db_data:/app/.data:rw
-      - ngrok_state:/root/.config/ngrok:rw
-      - ./logs:/app/logs:rw
-    networks: [hattz]
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/api/health/ping"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 15s
+# x-common: 공통 설정 (YAML 앵커)
+x-claude-common: &claude-common
+  build:
+    context: .
+    dockerfile: docker/Dockerfile.claude
+  env_file: .env
+  networks: [hattz]
+  restart: unless-stopped
+  extra_hosts:
+    - "host.docker.internal:host-gateway"  # 로컬 Flask 접근용
 
+x-api-common: &api-common
+  build:
+    context: .
+    dockerfile: docker/Dockerfile.api
+  env_file: .env
+  networks: [hattz]
+  restart: unless-stopped
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+
+services:
   # ===========================================================================
   # PM LAYER
   # PM-Worker: OpenAI API (GPT-5.2 Thinking)
   # PM-Reviewer: Claude CLI (Skeptic)
   # ===========================================================================
   pm-worker:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.api
+    <<: *api-common
     container_name: hattz_pm_worker
-    env_file: .env
     environment:
       - ROLE=pm
       - MODE=worker
       - LLM=gpt-5.2-thinking
       - PERSONA=strategist
-      - WEB_BASE_URL=http://web:5000
+      - WEB_BASE_URL=http://host.docker.internal:5000
       - OPENAI_API_KEY=${OPENAI_API_KEY}
     volumes:
       - ./:/app:ro
-    networks: [hattz]
-    depends_on: [web]
-    restart: unless-stopped
 
   pm-reviewer:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.claude
+    <<: *claude-common
     container_name: hattz_pm_reviewer
-    env_file: .env
     environment:
       - ROLE=pm
       - MODE=reviewer
       - LLM=claude-cli
       - PERSONA=skeptic
       - SUBAGENT=pm-reviewer
-      - WEB_BASE_URL=http://web:5000
-      # 구독 CLI 쓰려면 API키 비워라
+      - WEB_BASE_URL=http://host.docker.internal:5000
       - ANTHROPIC_API_KEY=
     volumes:
       - ./:/app:ro
       - ./.claude:/root/.claude:ro
       - claude_state:/root/.claude-state:rw
-    networks: [hattz]
-    depends_on: [web]
-    restart: unless-stopped
 
   # ===========================================================================
   # CODER LAYER
@@ -111,48 +83,36 @@ services:
   # Coder-Reviewer: Claude CLI (Devil's Advocate) - RO
   # ===========================================================================
   coder-worker:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.claude
+    <<: *claude-common
     container_name: hattz_coder_worker
-    env_file: .env
     environment:
       - ROLE=coder
       - MODE=worker
       - LLM=claude-cli
       - PERSONA=implementer
       - SUBAGENT=coder-worker
-      - WEB_BASE_URL=http://web:5000
+      - WEB_BASE_URL=http://host.docker.internal:5000
       - ANTHROPIC_API_KEY=
     volumes:
       - ./:/app:rw  # 유일하게 전체 RW
       - ./.claude:/root/.claude:ro
       - claude_state:/root/.claude-state:rw
-    networks: [hattz]
-    depends_on: [web]
-    restart: unless-stopped
 
   coder-reviewer:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.claude
+    <<: *claude-common
     container_name: hattz_coder_reviewer
-    env_file: .env
     environment:
       - ROLE=coder
       - MODE=reviewer
       - LLM=claude-cli
       - PERSONA=devils_advocate
       - SUBAGENT=coder-reviewer
-      - WEB_BASE_URL=http://web:5000
+      - WEB_BASE_URL=http://host.docker.internal:5000
       - ANTHROPIC_API_KEY=
     volumes:
       - ./:/app:ro
       - ./.claude:/root/.claude:ro
       - claude_state:/root/.claude-state:rw
-    networks: [hattz]
-    depends_on: [web]
-    restart: unless-stopped
 
   # ===========================================================================
   # QA LAYER
@@ -160,49 +120,37 @@ services:
   # QA-Reviewer: Claude CLI (Breaker) - RO
   # ===========================================================================
   qa-worker:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.claude
+    <<: *claude-common
     container_name: hattz_qa_worker
-    env_file: .env
     environment:
       - ROLE=qa
       - MODE=worker
       - LLM=claude-cli
       - PERSONA=tester
       - SUBAGENT=qa-worker
-      - WEB_BASE_URL=http://web:5000
+      - WEB_BASE_URL=http://host.docker.internal:5000
       - ANTHROPIC_API_KEY=
     volumes:
       - ./:/app:ro
       - ./tests:/app/tests:rw  # tests만 쓰기 가능
       - ./.claude:/root/.claude:ro
       - claude_state:/root/.claude-state:rw
-    networks: [hattz]
-    depends_on: [web]
-    restart: unless-stopped
 
   qa-reviewer:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.claude
+    <<: *claude-common
     container_name: hattz_qa_reviewer
-    env_file: .env
     environment:
       - ROLE=qa
       - MODE=reviewer
       - LLM=claude-cli
       - PERSONA=breaker
       - SUBAGENT=qa-reviewer
-      - WEB_BASE_URL=http://web:5000
+      - WEB_BASE_URL=http://host.docker.internal:5000
       - ANTHROPIC_API_KEY=
     volumes:
       - ./:/app:ro
       - ./.claude:/root/.claude:ro
       - claude_state:/root/.claude-state:rw
-    networks: [hattz]
-    depends_on: [web]
-    restart: unless-stopped
 
   # ===========================================================================
   # REVIEWER LAYER
@@ -210,42 +158,30 @@ services:
   # Reviewer-Reviewer: Claude CLI (Security Hawk) - RO
   # ===========================================================================
   reviewer-worker:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.api
+    <<: *api-common
     container_name: hattz_reviewer_worker
-    env_file: .env
     environment:
       - ROLE=reviewer
       - MODE=worker
       - LLM=gemini-2.5-flash
       - PERSONA=pragmatist
-      - WEB_BASE_URL=http://web:5000
+      - WEB_BASE_URL=http://host.docker.internal:5000
       - GOOGLE_API_KEY=${GOOGLE_API_KEY}
     volumes:
       - ./:/app:ro
-    networks: [hattz]
-    depends_on: [web]
-    restart: unless-stopped
 
   reviewer-reviewer:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.claude
+    <<: *claude-common
     container_name: hattz_reviewer_reviewer
-    env_file: .env
     environment:
       - ROLE=reviewer
       - MODE=reviewer
       - LLM=claude-cli
       - PERSONA=security_hawk
       - SUBAGENT=security-hawk
-      - WEB_BASE_URL=http://web:5000
+      - WEB_BASE_URL=http://host.docker.internal:5000
       - ANTHROPIC_API_KEY=
     volumes:
       - ./:/app:ro
       - ./.claude:/root/.claude:ro
       - claude_state:/root/.claude-state:rw
-    networks: [hattz]
-    depends_on: [web]
-    restart: unless-stopped

@@ -61,8 +61,14 @@ register_blueprints(app)
 from src.services.embedding_queue import init_embedding_worker, shutdown_embedding_worker
 import atexit
 
-# 앱 컨텍스트 내에서 워커 시작
+# 앱 컨텍스트 내에서 워커 시작 + 마이그레이션 실행
 with app.app_context():
+    # DB 마이그레이션
+    from src.services.database import run_is_internal_migration
+    migration_result = run_is_internal_migration()
+    if migration_result.get("added_columns"):
+        print(f"[Migration] Added columns: {migration_result['added_columns']}")
+
     init_embedding_worker()
     print("[EmbeddingQueue] Background worker started")
 

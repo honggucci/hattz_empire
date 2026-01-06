@@ -19,6 +19,7 @@ from . import database as db
 
 class TaskStatus(Enum):
     PENDING = "pending"      # 대기 중
+    STANDBY = "standby"      # 예비 대기 (하이브리드 모드: 스트리밍 끊김 시 활성화)
     RUNNING = "running"      # 실행 중
     SUCCESS = "success"      # 성공
     FAILED = "failed"        # 실패
@@ -599,6 +600,212 @@ def start_wpcn_optimize(session_id: str, symbol: str, timeframe: str, optimizer:
     task_id = create_task(session_id, "wpcn_optimize", message)
     start_task(task_id, wpcn_optimize_worker)
     return task_id
+
+
+# =============================================================================
+# Chat Background Worker
+# =============================================================================
+
+def chat_background_worker(
+    message: str,
+    agent_role: str,
+    progress_callback: Callable[[int, str], None]
+) -> str:
+    """
+    채팅 백그라운드 워커 - 클라이언트 연결 끊어도 계속 실행
+
+    Args:
+        message: 사용자 메시지
+        agent_role: 에이전트 역할 (pm, coder 등)
+        progress_callback: 진행률 콜백
+
+    Returns:
+        AI 응답 문자열
+    """
+    from src.core.llm_caller import call_agent, build_call_results_prompt
+    import src.services.executor as executor
+
+    progress_callback(10, "AI 호출 중...")
+
+    # 1단계: 메인 에이전트 호출
+    response, model_meta = call_agent(message, agent_role, return_meta=True)
+    progress_callback(40, "응답 처리 중...")
+
+    # 2단계: [CALL:agent] 태그 처리
+    if executor.has_call_tags(response):
+        call_infos = executor.extract_call_info(response)
+        total_calls = len(call_infos)
+
+        if total_calls > 0:
+            progress_callback(50, f"하위 에이전트 {total_calls}개 호출 중...")
+            call_results = []
+
+            for idx, call_info in enumerate(call_infos):
+                sub_agent = call_info['agent']
+                sub_message = call_info['message']
+
+                progress_callback(
+                    50 + int((idx + 1) / total_calls * 30),
+                    f"{sub_agent} 처리 중 ({idx+1}/{total_calls})..."
+                )
+
+                try:
+                    sub_response, sub_meta = call_agent(
+                        sub_message, sub_agent,
+                        auto_execute=True, use_translation=False, return_meta=True
+                    )
+                    call_results.append({
+                        'agent': sub_agent,
+                        'message': sub_message,
+                        'response': sub_response
+                    })
+                except Exception as e:
+                    call_results.append({
+                        'agent': sub_agent,
+                        'message': sub_message,
+                        'response': f"[오류] {str(e)}"
+                    })
+
+            # 3단계: 결과 종합
+            if call_results:
+                progress_callback(85, "결과 종합 중...")
+                followup_prompt = build_call_results_prompt(call_results)
+                response, model_meta = call_agent(followup_prompt, agent_role, return_meta=True)
+
+    progress_callback(95, "완료 처리 중...")
+
+    # 모델 정보 포함한 응답 반환
+    result_data = {
+        "response": response,
+        "model_info": model_meta,
+        "agent": agent_role
+    }
+    import json
+    return json.dumps(result_data, ensure_ascii=False)
+
+
+def start_chat_background(session_id: str, agent_role: str, message: str) -> str:
+    """
+    채팅을 백그라운드로 시작
+
+    Returns:
+        task_id
+    """
+    task_id = create_task(session_id, agent_role, message)
+    start_task(task_id, chat_background_worker)
+    return task_id
+
+
+# =============================================================================
+# Hybrid Mode - Standby Tasks (스트리밍 + 예비 백그라운드)
+# =============================================================================
+
+def create_standby_task(
+    session_id: str,
+    agent_role: str,
+    message: str
+) -> str:
+    """
+    예비 대기 상태로 태스크 생성 (LLM 호출 안 함)
+    스트리밍이 끊기면 activate_standby_task()로 활성화
+
+    Returns:
+        task_id
+    """
+    task_id = f"bg_{int(time.time())}_{uuid.uuid4().hex[:8]}"
+
+    task = BackgroundTask(
+        id=task_id,
+        session_id=session_id,
+        agent_role=agent_role,
+        message=message,
+        status=TaskStatus.STANDBY,  # 대기 상태
+        stage="standby"
+    )
+
+    with _tasks_lock:
+        _tasks[task_id] = task
+
+    # DB에도 저장
+    _save_task_to_db(task)
+
+    print(f"[BackgroundTask] Standby created: {task_id}")
+    return task_id
+
+
+def activate_standby_task(task_id: str) -> bool:
+    """
+    예비 대기 태스크를 활성화 (실제 LLM 호출 시작)
+    스트리밍이 끊겼을 때 호출
+
+    Returns:
+        True if activated, False if not found or already running
+    """
+    with _tasks_lock:
+        task = _tasks.get(task_id)
+        if not task:
+            # DB에서 로드 시도
+            db_task = _get_task_from_db(task_id)
+            if db_task and db_task.get('status') == TaskStatus.STANDBY.value:
+                # 메모리에 복원
+                task = BackgroundTask(
+                    id=task_id,
+                    session_id=db_task['session_id'],
+                    agent_role=db_task['agent_role'],
+                    message=db_task['message'],
+                    status=TaskStatus.STANDBY
+                )
+                _tasks[task_id] = task
+            else:
+                return False
+
+        if task.status != TaskStatus.STANDBY:
+            print(f"[BackgroundTask] Cannot activate: {task_id} is {task.status.value}")
+            return False
+
+    # 실제 작업 시작
+    print(f"[BackgroundTask] Activating standby: {task_id}")
+    return start_task(task_id, chat_background_worker)
+
+
+def cancel_standby_task(task_id: str) -> bool:
+    """
+    예비 대기 태스크 취소 (스트리밍 정상 완료 시)
+    LLM 호출 없이 취소되므로 비용 0
+
+    Returns:
+        True if cancelled
+    """
+    with _tasks_lock:
+        task = _tasks.get(task_id)
+        if task and task.status == TaskStatus.STANDBY:
+            task.status = TaskStatus.CANCELLED
+            task.completed_at = datetime.now()
+            task.stage = "cancelled_unused"
+            del _tasks[task_id]  # 메모리에서 제거
+
+    # DB에서도 삭제 (또는 상태 업데이트)
+    try:
+        with db.get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                DELETE FROM background_tasks WHERE id = ? AND status = 'standby'
+            """, (task_id,))
+            conn.commit()
+    except Exception as e:
+        print(f"[BackgroundTask] Cancel standby DB error: {e}")
+
+    print(f"[BackgroundTask] Standby cancelled: {task_id}")
+    return True
+
+
+def get_standby_task(task_id: str) -> Optional[Dict[str, Any]]:
+    """예비 대기 태스크 조회"""
+    with _tasks_lock:
+        task = _tasks.get(task_id)
+        if task and task.status == TaskStatus.STANDBY:
+            return _task_to_dict(task)
+    return None
 
 
 # 테이블 생성 (모듈 로드 시)

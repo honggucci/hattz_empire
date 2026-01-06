@@ -22,6 +22,14 @@ from src.services.task_events import emit_progress, emit_stage_change, emit_comp
 import src.services.database as db
 import src.services.executor as executor
 
+# Control Module (Session Rules System)
+from src.control import (
+    get_rules_for_session,
+    StaticChecker,
+    get_event_bus,
+    get_audit_logger,
+)
+
 
 @chat_bp.route('/chat', methods=['POST'])
 @login_required
@@ -94,7 +102,16 @@ def chat():
 
 @chat_bp.route('/chat/stream', methods=['POST'])
 def chat_stream():
-    """채팅 API (streaming) - abort 기능 및 [CALL:agent] 처리 포함"""
+    """
+    채팅 API (streaming) - 하이브리드 모드
+
+    하이브리드 모드:
+    1. 스트리밍 시작 전 standby 태스크 생성 (LLM 호출 안 함)
+    2. 스트리밍 정상 완료 시 standby 취소 (비용 0)
+    3. 클라이언트 연결 끊김 시 standby 활성화 → 백그라운드로 계속 실행
+    """
+    from src.services.background_tasks import create_standby_task, cancel_standby_task, activate_standby_task
+
     data = request.json
     user_message = data.get('message', '')
     agent_role = data.get('agent', 'pm')
@@ -124,6 +141,16 @@ def chat_stream():
     # 스트림 ID 생성 (중단용)
     stream_id = str(uuid.uuid4())
     active_streams[stream_id] = True
+
+    # ===== 하이브리드 모드: Standby 태스크 생성 =====
+    # Mock 모드가 아닐 때만 standby 생성 (테스트 시 불필요)
+    standby_task_id = None
+    if not use_mock:
+        standby_task_id = create_standby_task(session_id, agent_role, user_message)
+        print(f"[Hybrid] Standby task created: {standby_task_id}")
+
+    # 스트리밍 완료 여부 추적
+    streaming_completed = False
 
     def generate():
         try:
@@ -248,6 +275,50 @@ def chat_stream():
                         # 하위 에이전트 호출
                         sub_response, sub_meta = call_agent(sub_message, sub_agent, auto_execute=True, use_translation=False, return_meta=True)
 
+                        # =====================================================
+                        # [Control] 정적 검사 (Constitution + Session Rules)
+                        # =====================================================
+                        try:
+                            rules = get_rules_for_session(session_id)
+                            checker = StaticChecker(rules)
+                            check_result = checker.check(sub_response, file_type="python")
+
+                            event_bus = get_event_bus()
+                            audit_logger = get_audit_logger()
+
+                            # EventBus로 검토 이벤트 발행
+                            event_bus.emit_static_check_result(
+                                session_id=session_id,
+                                passed=check_result.passed,
+                                violations_count=len(check_result.violations),
+                                has_critical=check_result.has_critical(),
+                            )
+
+                            # Audit 로깅
+                            audit_logger.log_static_check(
+                                rules=rules,
+                                static_result=check_result,
+                                worker_agent=sub_agent,
+                                original_request=sub_message[:200],
+                            )
+
+                            if not check_result.passed:
+                                # 위반 발견 - 클라이언트에 경고 전송
+                                violations_summary = [
+                                    {"rule": v.rule_key, "severity": v.severity.value, "message": v.message}
+                                    for v in check_result.violations[:5]  # 최대 5개
+                                ]
+                                yield f"data: {json.dumps({'stage': 'control_warning', 'sub_agent': sub_agent, 'violations': violations_summary, 'passed': False}, ensure_ascii=False)}\n\n"
+
+                                # Critical 위반은 응답에 경고 추가
+                                if check_result.has_critical():
+                                    sub_response = f"⚠️ [CONTROL WARNING] Constitution 위반 감지됨!\n\n{sub_response}"
+                                    print(f"[Control] ⚠️ CRITICAL violation in {sub_agent} response!")
+                            else:
+                                print(f"[Control] ✅ {sub_agent} response passed static check")
+                        except Exception as ctrl_err:
+                            print(f"[Control] Error during static check: {ctrl_err}")
+
                         # 모니터에 완료 등록
                         monitor.complete_task(
                             task_id=task_id,
@@ -265,8 +336,8 @@ def chat_stream():
                         yield f"data: {json.dumps({'aborted': True, 'message': f'{sub_agent} 호출 후 중단됨'}, ensure_ascii=False)}\n\n"
                         return
 
-                    # 하위 에이전트 완료 알림
-                    yield f"data: {json.dumps({'stage': 'sub_agent_done', 'sub_agent': sub_agent, 'task_id': task_id, 'progress': f'{idx+1}/{total_calls}', 'response_length': len(sub_response), 'model_info': sub_meta}, ensure_ascii=False)}\n\n"
+                    # 하위 에이전트 완료 알림 (상태만, 내용 없음)
+                    yield f"data: {json.dumps({'stage': 'sub_agent_done', 'sub_agent': sub_agent, 'task_id': task_id, 'progress': f'{idx+1}/{total_calls}'}, ensure_ascii=False)}\n\n"
 
                     # SSE broadcast: sub-agent done
                     emit_progress(session_id, 'sub_agent_done', agent_role, 50 + (idx * 10), sub_agent=sub_agent, total_agents=total_calls)
@@ -278,8 +349,8 @@ def chat_stream():
                         'task_id': task_id
                     })
 
-                    # DB에 하위 에이전트 응답 저장
-                    db.add_message(session_id, 'assistant', f"[{sub_agent.upper()}]\n{sub_response}", sub_agent)
+                    # DB에 하위 에이전트 응답 저장 (내부 기록용, 웹에는 표시 안 함)
+                    db.add_message(session_id, 'assistant', f"[{sub_agent.upper()}]\n{sub_response}", sub_agent, is_internal=True)
 
                 # 모든 하위 에이전트 완료 - PM이 결과 종합
                 if call_results:
@@ -323,9 +394,24 @@ def chat_stream():
                 # SSE broadcast: complete
                 emit_complete(session_id, agent_role, model_meta)
 
+            # ===== 하이브리드 모드: 스트리밍 정상 완료 =====
+            nonlocal streaming_completed
+            streaming_completed = True
+
         finally:
             # 스트림 정리
             active_streams.pop(stream_id, None)
+
+            # ===== 하이브리드 모드: Standby 처리 =====
+            if standby_task_id:
+                if streaming_completed:
+                    # 정상 완료 → standby 취소 (비용 0)
+                    cancel_standby_task(standby_task_id)
+                    print(f"[Hybrid] Standby cancelled (streaming completed): {standby_task_id}")
+                else:
+                    # 비정상 종료 (연결 끊김) → standby 활성화
+                    print(f"[Hybrid] Activating standby (client disconnected): {standby_task_id}")
+                    activate_standby_task(standby_task_id)
 
     return Response(generate(), mimetype='text/event-stream')
 
@@ -352,6 +438,126 @@ def abort_stream():
             'stream_id': stream_id,
             'message': '스트림을 찾을 수 없음 (이미 종료되었거나 존재하지 않음)'
         }), 404
+
+
+@chat_bp.route('/chat/background', methods=['POST'])
+@login_required
+def chat_background():
+    """
+    백그라운드 채팅 API - 클라이언트 연결 끊어도 서버에서 계속 실행
+
+    Request JSON:
+    {
+        "message": "사용자 메시지",
+        "agent": "pm",
+        "session_id": "session_xxx"
+    }
+
+    Response:
+    {
+        "task_id": "bg_xxx",
+        "status": "started",
+        "message": "백그라운드 작업이 시작되었습니다"
+    }
+    """
+    from src.services.background_tasks import start_chat_background
+    from src.core.llm_caller import extract_project_from_message
+
+    data = request.json
+    user_message = data.get('message', '')
+    agent_role = data.get('agent', 'pm')
+    client_session_id = data.get('session_id')
+
+    if not user_message:
+        return jsonify({'error': 'Message required'}), 400
+
+    # [PROJECT: xxx] 태그에서 프로젝트 추출
+    current_project, _ = extract_project_from_message(user_message)
+
+    # 세션 관리
+    current_session_id = get_current_session()
+    if client_session_id:
+        current_session_id = client_session_id
+        set_current_session(client_session_id)
+    elif not current_session_id:
+        current_session_id = db.create_session(agent=agent_role, project=current_project)
+        set_current_session(current_session_id)
+
+    # DB에 사용자 메시지 저장
+    db.add_message(current_session_id, 'user', user_message, agent_role)
+
+    # 백그라운드 작업 시작
+    task_id = start_chat_background(current_session_id, agent_role, user_message)
+
+    return jsonify({
+        'task_id': task_id,
+        'session_id': current_session_id,
+        'status': 'started',
+        'message': '백그라운드 작업이 시작되었습니다. 폰을 꺼도 서버에서 계속 실행됩니다.'
+    })
+
+
+@chat_bp.route('/chat/background/<task_id>', methods=['GET'])
+@login_required
+def get_background_task(task_id: str):
+    """백그라운드 작업 상태 조회"""
+    from src.services.background_tasks import get_task
+
+    task = get_task(task_id)
+    if not task:
+        return jsonify({'error': 'Task not found'}), 404
+
+    return jsonify(task)
+
+
+@chat_bp.route('/chat/background/pending', methods=['GET'])
+@login_required
+def get_pending_results():
+    """
+    완료되었지만 아직 표시되지 않은 백그라운드 채팅 결과 조회
+
+    재접속 시 이 API를 호출하여 놓친 결과를 가져옴
+    """
+    from src.services.background_tasks import get_unshown_completed_tasks, mark_result_shown
+    import json as json_module
+
+    current_session_id = get_current_session()
+    if not current_session_id:
+        return jsonify({'tasks': []})
+
+    tasks = get_unshown_completed_tasks(current_session_id)
+
+    # 결과 파싱 및 DB에 응답 저장
+    results = []
+    for task in tasks:
+        try:
+            if task.get('result'):
+                result_data = json_module.loads(task['result'])
+                response = result_data.get('response', '')
+                model_info = result_data.get('model_info')
+                agent = result_data.get('agent', task.get('agent_role', 'pm'))
+
+                # DB에 어시스턴트 응답 저장 (아직 저장되지 않은 경우)
+                db.add_message(task['session_id'], 'assistant', response, agent)
+
+                results.append({
+                    'task_id': task['id'],
+                    'response': response,
+                    'model_info': model_info,
+                    'agent': agent,
+                    'completed_at': task.get('completed_at'),
+                    'original_message': task.get('message')
+                })
+
+                # 결과 확인됨 표시
+                mark_result_shown(task['id'])
+        except Exception as e:
+            print(f"[BackgroundChat] Parse error for {task['id']}: {e}")
+
+    return jsonify({
+        'tasks': results,
+        'count': len(results)
+    })
 
 
 @chat_bp.route('/history')

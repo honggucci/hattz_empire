@@ -253,9 +253,9 @@ async function sendMessage() {
                             break;
                         }
 
-                        // 하위 에이전트 완료 시 응답 표시
+                        // 하위 에이전트 완료 시 로그만 (UI에 내용 표시 안 함)
                         if (data.stage === 'sub_agent_done' && data.sub_agent) {
-                            console.log(`[Sub-Agent] ${data.sub_agent} completed (${data.response_length} chars)`);
+                            console.log(`[Sub-Agent] ${data.sub_agent} completed (${data.progress})`);
                         }
 
                         if (data.token) {
@@ -1263,8 +1263,61 @@ async function checkPendingTasks() {
                 }, i * 1000);  // 1초 간격으로 표시
             }
         }
+
+        // 3. 백그라운드 채팅 결과 조회 (폰 꺼도 계속 실행된 채팅)
+        await checkPendingChatResults();
+
     } catch (error) {
         console.error('[BackgroundTask] Check pending error:', error);
+    }
+}
+
+// 백그라운드 채팅 결과 조회 (재접속 시)
+async function checkPendingChatResults() {
+    try {
+        const response = await fetch('/api/chat/background/pending');
+        const data = await response.json();
+
+        if (data.tasks && data.tasks.length > 0) {
+            console.log(`[BackgroundChat] Found ${data.count} pending chat results`);
+
+            // 환영 메시지 제거
+            const welcome = chatMessages.querySelector('.welcome-message');
+            if (welcome) welcome.remove();
+
+            // 순차적으로 결과 표시
+            for (let i = 0; i < data.tasks.length; i++) {
+                const task = data.tasks[i];
+                setTimeout(() => {
+                    // 원본 질문 표시 (이미 DB에 있지만 UI에 없을 수 있음)
+                    if (task.original_message) {
+                        appendMessage('user', task.original_message, task.agent);
+                    }
+
+                    // AI 응답 표시
+                    const msgDiv = appendMessage('assistant', task.response, task.agent);
+
+                    // 모델 정보 뱃지 추가
+                    if (task.model_info) {
+                        addModelBadge(msgDiv, task.model_info);
+                    }
+
+                    // 백그라운드 완료 표시
+                    const bgBadge = document.createElement('span');
+                    bgBadge.className = 'background-complete-badge';
+                    bgBadge.innerHTML = '📱 백그라운드 완료';
+                    bgBadge.title = `완료: ${task.completed_at}`;
+                    msgDiv.querySelector('.message-header').appendChild(bgBadge);
+
+                    playNotificationSound();
+                }, i * 500);  // 0.5초 간격으로 표시
+            }
+
+            // 세션 목록 새로고침
+            loadSessions();
+        }
+    } catch (error) {
+        console.error('[BackgroundChat] Check pending error:', error);
     }
 }
 

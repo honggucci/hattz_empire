@@ -67,7 +67,7 @@
                     </span>
                     <div class="admin-dropdown">
                         <button class="admin-dropdown-btn" id="admin-dropdown-btn">
-                            <span>관리자</span>
+                            <span>{{ current_user.username if current_user.is_authenticated else '메뉴' }}</span>
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
                                 <path d="M6 9l6 6 6-6"/>
                             </svg>
@@ -88,6 +88,11 @@
                             <a href="/api/health/status" class="admin-menu-item" target="_blank">
                                 <span class="menu-icon">🔍</span>
                                 <span>시스템 상태</span>
+                            </a>
+                            <div class="menu-divider"></div>
+                            <a href="/logout" class="admin-menu-item logout-item">
+                                <span class="menu-icon">🚪</span>
+                                <span>로그아웃</span>
                             </a>
                         </div>
                     </div>

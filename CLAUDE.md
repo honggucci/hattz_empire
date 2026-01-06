@@ -1,9 +1,83 @@
-# Hattz Empire - AI Orchestration System (v2.2.1)
+# Hattz Empire - AI Orchestration System (v2.3)
 
 ## 프로젝트 개요
 비용 최적화 AI 팀 오케스트레이션 시스템. 비용 86% 절감 + 품질 유지 + JSONL 영속화.
 
-## v2.2.1 아키텍처 (2026-01-06)
+## v2.3 아키텍처 (2026-01-06)
+
+**핵심 변경**: Hook Chain 기반 내부통제 시스템 추가
+
+### v2.3 신규 패키지
+
+#### 1. src/hooks/ - Hook Chain System
+```
+hooks/
+├── __init__.py     # 패키지 엔트리
+├── base.py         # Hook, HookContext, HookResult 기본 클래스
+├── pre_run.py      # 세션 규정 로드 + rules_hash 계산
+├── pre_review.py   # Static Gate (0원 1차 게이트)
+├── post_review.py  # 감사 로그 기록
+├── stop.py         # StopCode Enum (실패/중단 사유)
+└── chain.py        # HookChain 체인 실행기
+```
+
+**훅 흐름**:
+```
+PRE_RUN → PRE_REVIEW (Static Gate) → LLM Review → POST_REVIEW → STOP
+```
+
+#### 2. src/context/ - Context Management
+```
+context/
+├── __init__.py
+├── counter.py      # TokenCounter (토큰 사용량 추적)
+├── compactor.py    # Preemptive Compaction (85% 임계치)
+└── injector.py     # Constitution + Session Rules 주입
+```
+
+#### 3. src/control/ - 내부통제 시스템
+```
+control/
+├── constitution.py   # 헌법 (절대 금지)
+├── rules.py          # SessionRules Pydantic 스키마
+├── rules_store.py    # JSON 파일 로더
+├── jsonc_parser.py   # JSONC (JSON with Comments) 파서 [NEW]
+├── static_check.py   # AST + Regex 정적 검사
+├── prompt_injector.py
+├── verdict.py
+├── audit_log.py
+└── event_bus.py
+```
+
+#### 4. src/services/router.py - Router Agent [NEW]
+PM 병목 해소를 위한 자동 태스크 라우팅:
+- 키워드 기반 + LLM 하이브리드 라우팅
+- CEO 프리픽스 강제 라우팅 (검색/, 코딩/, 분석/)
+- 에이전트: Coder, Excavator, QA, Researcher, Analyst, Strategist, PM
+
+### Session Rules (config/session_rules/)
+```json
+// live-trade-btc-001.json
+{
+  "session_id": "live-trade-btc-001",
+  "mode": "live",
+  "risk_profile": "strict",
+  "rules": {
+    "trading": {"market_order": "forbid", "max_order_usd": 100},
+    "code": {"forbid_sleep_in_api_loop": true, "secrets_hardcoding": "forbid"},
+    "quality": {"allow_skip_tests": false, "max_files_changed": 12}
+  }
+}
+```
+
+### Static Gate 검사 항목
+- API Key 패턴 감지 (OpenAI, AWS, GitHub, Slack, Google)
+- 무한루프 감지 (while True without break)
+- Sleep in loop 감지
+
+---
+
+## v2.2.1 아키텍처
 
 **핵심 철학**: Docker Worker-Reviewer Pair + JSONL 영속화
 - 9개 Docker 컨테이너로 분산 처리
@@ -115,6 +189,42 @@ hattz_empire/
 - DB에 작업 이력 저장
 
 ## 최근 작업 내역
+
+### 세션 7 (2026-01-06) - v2.3 Hook Chain 아키텍처
+
+oh-my-opencode 분석 기반 내부통제 시스템 구축:
+
+1. **hooks/ 패키지 구현**
+   - `PreRunHook`: 세션 규정 로드, rules_hash 계산
+   - `PreReviewHook`: Static Gate (0원 1차 게이트)
+   - `PostReviewHook`: 감사 로그 기록
+   - `StopHook`: StopCode Enum (COMPLETED, STATIC_REJECT, LLM_REJECT 등)
+   - `HookChain`: 체인 실행기 + `create_default_chain()`
+
+2. **context/ 패키지 구현**
+   - `TokenCounter`: 토큰 사용량 추적 (85% 경고, 압축 임계치)
+   - `Compactor`: Preemptive Compaction (휴리스틱 + LLM 요약)
+   - `ContextInjector`: Constitution + Session Rules 프롬프트 주입
+
+3. **JSONC 파서 추가** (`src/control/jsonc_parser.py`)
+   - // 라인 주석, /* */ 블록 주석 지원
+   - 후행 쉼표 허용
+   - `JsoncRulesStore`: .json/.jsonc 모두 지원
+
+4. **Router Agent 신설** (`src/services/router.py`)
+   - PM 병목 해소를 위한 자동 태스크 라우팅
+   - 키워드 기반 + LLM 하이브리드 라우팅
+   - CEO 프리픽스: 검색/, 코딩/, 분석/
+
+5. **ReviewerService Hook 통합**
+   - `review_with_hooks()` 메서드 추가
+   - Static Gate → LLM Review → Audit Log 전체 흐름
+
+6. **Static Checker 패턴 강화**
+   - `sk-proj-*` OpenAI 프로젝트 키 감지
+   - Generic `api_key=`, `secret_key=` 패턴 추가
+
+---
 
 ### 세션 6 (2026-01-06) - Docker + JSONL Persistence
 

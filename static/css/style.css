@@ -496,6 +496,17 @@ body {
     font-size: 14px;
 }
 
+.menu-divider {
+    height: 1px;
+    background: var(--border-color);
+    margin: 6px 0;
+}
+
+.logout-item:hover {
+    background: rgba(255, 100, 100, 0.1);
+    color: #ff6b6b;
+}
+
 /* Processing Bar - AI 작업 중 표시 (개선 버전) */
 .processing-bar {
     background: linear-gradient(135deg,
@@ -1985,6 +1996,30 @@ body {
 
 .model-badge-container + .feedback-buttons {
     margin-top: 8px;
+}
+
+/* =============================================================================
+   백그라운드 완료 뱃지
+   ============================================================================= */
+
+.background-complete-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    margin-left: 8px;
+    font-size: 10px;
+    font-weight: 500;
+    background: linear-gradient(135deg, #3fb950 0%, #238636 100%);
+    border-radius: 12px;
+    color: white;
+    animation: bgBadgePulse 2s ease-in-out;
+}
+
+@keyframes bgBadgePulse {
+    0% { opacity: 0; transform: scale(0.8); }
+    50% { opacity: 1; transform: scale(1.1); }
+    100% { opacity: 1; transform: scale(1); }
 }
 
 /* =============================================================================

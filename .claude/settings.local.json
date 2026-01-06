@@ -29,7 +29,9 @@
       "Bash(docker stop:*)",
       "Bash(docker ps:*)",
       "Bash(start cmd /c start.bat)",
-      "Bash(docker logs:*)"
+      "Bash(docker logs:*)",
+      "Bash(docker-compose up:*)",
+      "Bash(docker-compose:*)"
     ]
   }
 }
