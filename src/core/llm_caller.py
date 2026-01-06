@@ -265,6 +265,10 @@ def call_llm(model_config: ModelConfig, messages: list, system_prompt: str) -> s
         return call_openai(model_config, messages, system_prompt)
     elif model_config.provider == "google":
         return call_google(model_config, messages, system_prompt)
+    elif model_config.provider == "claude_cli":
+        # Claude Code CLI provider (EXEC tier)
+        from src.services.cli_supervisor import call_claude_cli
+        return call_claude_cli(messages, system_prompt, getattr(model_config, 'profile', 'coder'))
     else:
         return f"[Error] Unknown provider: {model_config.provider}"
 

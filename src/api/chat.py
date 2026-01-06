@@ -414,10 +414,17 @@ def get_agent_prompt(role: str):
 
 @chat_bp.route('/projects')
 def get_projects():
-    """프로젝트 목록 조회"""
+    """프로젝트 목록 조회 (사용자 권한에 따라 필터링)"""
     from config import PROJECTS
+    from flask_login import current_user
+
     projects = []
     for project_id, config in PROJECTS.items():
+        # 사용자의 allowed_projects 확인
+        if current_user.is_authenticated:
+            if not current_user.can_access_project(project_id):
+                continue  # 접근 권한 없는 프로젝트 제외
+
         projects.append({
             'id': project_id,
             'name': config['name'],

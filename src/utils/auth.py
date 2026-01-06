@@ -16,13 +16,20 @@ from flask_login import LoginManager, UserMixin, current_user
 class User(UserMixin):
     """Simple User class for Flask-Login"""
 
-    def __init__(self, user_id: str, username: str, role: str = "user"):
+    def __init__(self, user_id: str, username: str, role: str = "user", allowed_projects: list = None):
         self.id = user_id
         self.username = username
         self.role = role
+        self.allowed_projects = allowed_projects  # None = 모든 프로젝트 접근 가능
 
     def is_admin(self) -> bool:
         return self.role == "admin"
+
+    def can_access_project(self, project_id: str) -> bool:
+        """프로젝트 접근 권한 확인"""
+        if self.allowed_projects is None:
+            return True  # None이면 모든 프로젝트 접근 가능 (admin)
+        return project_id in self.allowed_projects
 
 
 # =============================================================================
@@ -41,7 +48,15 @@ USERS = {
         "id": "1",
         "username": "admin",
         "password_hash": _hash_password("admin"),
-        "role": "admin"
+        "role": "admin",
+        "allowed_projects": None  # None = 모든 프로젝트 접근 가능
+    },
+    "test": {
+        "id": "2",
+        "username": "test",
+        "password_hash": _hash_password("1234"),
+        "role": "user",
+        "allowed_projects": ["test"]  # test 프로젝트만 접근 가능
     }
 }
 
@@ -53,7 +68,8 @@ def get_user(username: str) -> User | None:
         return User(
             user_id=user_data["id"],
             username=user_data["username"],
-            role=user_data["role"]
+            role=user_data["role"],
+            allowed_projects=user_data.get("allowed_projects")
         )
     return None
 
@@ -65,7 +81,8 @@ def get_user_by_id(user_id: str) -> User | None:
             return User(
                 user_id=data["id"],
                 username=data["username"],
-                role=data["role"]
+                role=data["role"],
+                allowed_projects=data.get("allowed_projects")
             )
     return None
 

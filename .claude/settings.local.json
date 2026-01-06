@@ -24,7 +24,12 @@
       "Bash(python -m py_compile:*)",
       "Bash(dir:*)",
       "Bash(tasklist:*)",
-      "Bash(findstr:*)"
+      "Bash(findstr:*)",
+      "Bash(docker start:*)",
+      "Bash(docker stop:*)",
+      "Bash(docker ps:*)",
+      "Bash(start cmd /c start.bat)",
+      "Bash(docker logs:*)"
     ]
   }
 }

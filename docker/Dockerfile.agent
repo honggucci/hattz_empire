@@ -1,0 +1,67 @@
+# Hattz Empire v2.2 - Agent Container
+# Python + Node.js (Claude CLI) 통합 이미지
+# Worker/Reviewer 공용
+
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# ===========================================================================
+# 1. 시스템 패키지 + Node.js 설치
+# ===========================================================================
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    git \
+    gnupg2 \
+    build-essential \
+    unixodbc \
+    unixodbc-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Node.js 20.x (Claude CLI용)
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+# ===========================================================================
+# 2. Claude CLI 설치
+# ===========================================================================
+RUN npm install -g @anthropic-ai/claude-code
+
+# ===========================================================================
+# 3. Microsoft ODBC Driver (DB 연결용)
+# ===========================================================================
+RUN curl https://packages.microsoft.com/keys/microsoft.asc | apt-key add - \
+    && curl https://packages.microsoft.com/config/debian/11/prod.list > /etc/apt/sources.list.d/mssql-release.list \
+    && apt-get update \
+    && ACCEPT_EULA=Y apt-get install -y msodbcsql18 \
+    && rm -rf /var/lib/apt/lists/*
+
+# ===========================================================================
+# 4. Python 의존성
+# ===========================================================================
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# ===========================================================================
+# 5. 앱 코드 (볼륨으로 마운트되므로 빌드 시에는 최소한만)
+# ===========================================================================
+COPY . .
+
+# ===========================================================================
+# 6. 환경변수
+# ===========================================================================
+ENV PYTHONUNBUFFERED=1
+ENV CLAUDE_CODE_NONINTERACTIVE=1
+ENV NODE_ENV=production
+
+# ===========================================================================
+# 7. 비root 사용자 (선택적 - Claude CLI는 root 필요할 수 있음)
+# ===========================================================================
+# RUN useradd -m -r appuser && chown -R appuser:appuser /app
+# USER appuser
+
+# ===========================================================================
+# 8. 기본 명령 (docker-compose에서 오버라이드)
+# ===========================================================================
+CMD ["tail", "-f", "/dev/null"]

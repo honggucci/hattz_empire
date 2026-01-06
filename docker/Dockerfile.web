@@ -1,0 +1,41 @@
+# Hattz Empire v2.2 - Web Container
+# Flask + Gunicorn + ngrok + supervisord
+# DB는 여기만 가짐 (워커들은 HTTP로 접근)
+
+FROM python:3.12-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl ca-certificates git supervisor \
+    gnupg2 unixodbc unixodbc-dev \
+  && rm -rf /var/lib/apt/lists/*
+
+# ngrok 설치 (v3)
+RUN curl -sSL https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz \
+  | tar -xz -C /usr/local/bin
+
+# Microsoft ODBC Driver (MSSQL 연결용) - GPG key 방식 (apt-key deprecated)
+RUN curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg \
+    && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/microsoft-prod.gpg] https://packages.microsoft.com/debian/12/prod bookworm main" > /etc/apt/sources.list.d/mssql-release.list \
+    && apt-get update \
+    && ACCEPT_EULA=Y apt-get install -y --no-install-recommends msodbcsql18 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt \
+    && pip install --no-cache-dir gunicorn
+
+# 로그 디렉토리
+RUN mkdir -p /app/logs
+
+# supervisord 설정 복사
+COPY docker/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+
+ENV PYTHONUNBUFFERED=1
+ENV FLASK_APP=app.py
+ENV FLASK_ENV=production
+
+EXPOSE 5000 4040
+
+CMD ["/usr/bin/supervisord", "-n", "-c", "/etc/supervisor/conf.d/supervisord.conf"]

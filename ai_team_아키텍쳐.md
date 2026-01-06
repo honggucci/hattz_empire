@@ -1,11 +1,11 @@
-# HATTZ EMPIRE - AI Orchestration System v2.0
+# HATTZ EMPIRE - AI Orchestration System v2.2.1
 
-> **2026.01 | Budget-Optimized Traffic Control Architecture**
-> **비용 86% 절감 + 품질 유지**
+> **2026.01.06 | Docker Worker-Reviewer Pair Architecture**
+> **비용 86% 절감 + 품질 유지 + JSONL 영속화**
 
 ---
 
-## System Overview
+## System Overview v2.2.1
 
 ```
                          ┌──────────────────────┐
@@ -14,279 +14,263 @@
                          └──────────┬───────────┘
                                     │ (Korean)
                     ┌───────────────▼────────────────┐
-                    │   Flask Web Interface          │
+                    │     Docker Container: WEB      │
+                    │   Flask + ngrok + supervisord  │
+                    │   DB 소유자 (SQLite)           │
                     │   localhost:5000               │
                     └────────────┬──────────────────┘
                                  │
-                    ┌────────────▼────────────────┐
-                    │      HattzRouter v2.0       │
-                    │   Budget-Optimized Routing  │
-                    └────────────┬────────────────┘
+              ┌──────────────────┼──────────────────┐
+              │           Jobs API (HTTP)           │
+              │   /api/jobs/pull  /api/jobs/push    │
+              └──────────────────┬──────────────────┘
                                  │
 ┌────────────────────────────────┼────────────────────────────────┐
-│                          MODEL TIERS                            │
+│                    WORKER-REVIEWER PAIRS                        │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
-│  ┌─── BUDGET (80%) ─────────────────────────────────────────┐  │
-│  │  Gemini 2.0 Flash ($0.10/$0.40 per 1M)                   │  │
-│  │  ├─ PM 일반 작업                                         │  │
-│  │  ├─ Analyst (로그 분석)                                  │  │
-│  │  └─ 단순 질문, 요약, 번역                                │  │
-│  └──────────────────────────────────────────────────────────┘  │
-│                                                                 │
-│  ┌─── STANDARD (15%) ───────────────────────────────────────┐  │
-│  │  Claude Sonnet 4 ($3/$15 per 1M)                         │  │
-│  │  ├─ Coder (코드 수정, 버그 픽스)                         │  │
-│  │  ├─ Excavator (의도 정제)                                │  │
-│  │  ├─ QA 기본                                              │  │
-│  │  └─ Strategist 초안                                      │  │
-│  └──────────────────────────────────────────────────────────┘  │
-│                                                                 │
-│  ┌─── VIP (5%) ─────────────────────────────────────────────┐  │
-│  │  고위험: Claude Opus 4.5 ($5/$25) - 보안 감사            │  │
-│  │  추론: GPT-4o Thinking ($2.5/$10) - 원인 분석            │  │
-│  └──────────────────────────────────────────────────────────┘  │
-│                                                                 │
-│  ┌─── RESEARCH (트리거) ────────────────────────────────────┐  │
-│  │  Perplexity Sonar Pro ($3/$15) - 실시간 검색             │  │
-│  └──────────────────────────────────────────────────────────┘  │
+│  ┌─── PM LAYER ────────────────────────────────────────────┐   │
+│  │  PM-Worker     : GPT-5.2 Thinking    (Strategist)       │   │
+│  │  PM-Reviewer   : Claude CLI          (Skeptic)          │   │
+│  └─────────────────────────────────────────────────────────┘   │
+│                          ↓ APPROVE                              │
+│  ┌─── CODER LAYER ─────────────────────────────────────────┐   │
+│  │  Coder-Worker  : Claude CLI (RW)     (Implementer)      │   │
+│  │  Coder-Reviewer: Claude CLI (RO)     (Devil's Advocate) │   │
+│  └─────────────────────────────────────────────────────────┘   │
+│                          ↓ APPROVE                              │
+│  ┌─── QA LAYER ────────────────────────────────────────────┐   │
+│  │  QA-Worker     : Claude CLI (tests/ RW) (Tester)        │   │
+│  │  QA-Reviewer   : Claude CLI (RO)        (Breaker)       │   │
+│  └─────────────────────────────────────────────────────────┘   │
+│                          ↓ APPROVE                              │
+│  ┌─── REVIEWER LAYER ──────────────────────────────────────┐   │
+│  │  Reviewer-Worker  : Gemini 2.5 Flash (Pragmatist)       │   │
+│  │  Reviewer-Reviewer: Claude CLI       (Security Hawk)    │   │
+│  └─────────────────────────────────────────────────────────┘   │
+│                          ↓ SHIP                                 │
+│                    [Pipeline Complete]                          │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## HattzRouter v2.0 - 비용 최적화 라우팅
+## Docker Architecture (9 Containers)
 
-### 라우팅 우선순위
+### Container 구성
 
-```
-1. 고위험 키워드 감지 → VIP-AUDIT (Opus)
-   └─ api_key, 주문, 실거래, 출금, 보안...
+| Container | LLM | Persona | 권한 | 역할 |
+|-----------|-----|---------|------|------|
+| **web** | - | Control Tower | RW | DB 소유, Flask + ngrok |
+| **pm-worker** | GPT-5.2 Thinking | Strategist | RO | 태스크 분해, 전략 |
+| **pm-reviewer** | Claude CLI | Skeptic | RO | 전략 검증 |
+| **coder-worker** | Claude CLI | Implementer | **RW** | 코드 구현 |
+| **coder-reviewer** | Claude CLI | Devil's Advocate | RO | 코드 리뷰 |
+| **qa-worker** | Claude CLI | Tester | tests/ RW | 테스트 작성 |
+| **qa-reviewer** | Claude CLI | Breaker | RO | 테스트 검증 |
+| **reviewer-worker** | Gemini 2.5 Flash | Pragmatist | RO | 최종 리뷰 |
+| **reviewer-reviewer** | Claude CLI | Security Hawk | RO | 보안 감사 |
 
-2. 추론 키워드 감지 → VIP-THINKING (GPT-4o)
-   └─ 왜, 원인, 디버그, 분석해...
-
-3. 검색 키워드 감지 → RESEARCH (Perplexity)
-   └─ 검색, 찾아, 최신, 동향...
-
-4. 대용량 컨텍스트 → BUDGET (Gemini Flash)
-   └─ 50K+ 토큰
-
-5. 에이전트 기본 티어
-   └─ agent_to_tier 매핑
-```
-
-### 에이전트별 기본 티어 매핑
-
-| 에이전트 | 기본 티어 | 모델 | 비용 (per 1M) |
-|----------|-----------|------|---------------|
-| PM | BUDGET | Gemini 2.0 Flash | $0.10/$0.40 |
-| Analyst | BUDGET | Gemini 2.0 Flash | $0.10/$0.40 |
-| Documentor | BUDGET | Gemini 2.0 Flash | $0.10/$0.40 |
-| Coder | STANDARD | Claude Sonnet 4 | $3/$15 |
-| Excavator | STANDARD | Claude Sonnet 4 | $3/$15 |
-| QA | STANDARD | Claude Sonnet 4 | $3/$15 |
-| Strategist | STANDARD | Claude Sonnet 4 | $3/$15 |
-| Researcher | RESEARCH | Perplexity Sonar Pro | $3/$15 |
-
-### 자동 승격 (Escalation)
+### Docker Files
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    ESCALATION CHAIN                          │
-├─────────────────────────────────────────────────────────────┤
-│                                                              │
-│  BUDGET (Gemini Flash)                                       │
-│      │                                                       │
-│      ▼ (실패 또는 복잡)                                      │
-│  STANDARD (Claude Sonnet 4)                                  │
-│      │                                                       │
-│      ▼ (고위험 또는 추론 필요)                               │
-│  VIP (Opus 4.5 / GPT Thinking)                              │
-│                                                              │
-└─────────────────────────────────────────────────────────────┘
+docker/
+├── Dockerfile.web      # Flask + Gunicorn + ngrok + supervisord
+├── Dockerfile.api      # Python only (OpenAI/Gemini API)
+├── Dockerfile.claude   # Python + Node.js + Claude CLI
+└── supervisord.conf    # gunicorn + ngrok 동시 실행
+
+docker-compose.yml      # 9개 컨테이너 오케스트레이션
 ```
 
 ---
 
-## 비용 효율 분석
+## JSONL 영속화 (v2.2.1 NEW)
 
-### Before vs After (1000 requests 기준)
+### 대화 연결 구조
 
-| 구분 | v1.0 (기존) | v2.0 (최적화) |
-|------|-------------|---------------|
-| PM/전략 | GPT-5 Thinking (400건) | Gemini Flash (800건) |
-| Coder/QA | Opus 4.5 (400건) | Sonnet 4 (120건) |
-| Analyst | Gemini Pro (200건) | Gemini Flash (포함) |
-| VIP/고위험 | - | Opus 4.5 (30건) |
-| 추론 | - | GPT Thinking (20건) |
-| 검색 | - | Perplexity (30건) |
-| **총 비용** | **$32.30** | **$4.56** |
+모든 에이전트 간 대화가 `parent_id`로 연결되어 저장됩니다:
+
+```
+CEO → PM-Worker → PM-Reviewer → CODER-Worker → ...
+  │        │            │
+  └────────┴────────────┴── parent_id로 연결
+
+JSONL 파일: src/infra/conversations/stream/YYYY-MM-DD.jsonl
+```
+
+### 메시지 구조
+
+```json
+{
+  "id": "msg_20260106_120000_abc123",
+  "t": "2026-01-06T12:00:00.000000",
+  "from_agent": "pm-worker",
+  "to_agent": "pipeline",
+  "type": "response",
+  "content": "TaskSpec: ...",
+  "parent_id": "msg_20260106_115959_def456",
+  "metadata": {
+    "job_id": "...",
+    "task_id": "...",
+    "verdict": "APPROVE",
+    "success": true
+  }
+}
+```
+
+---
+
+## Jobs API
+
+### Endpoints
+
+| Method | Endpoint | 설명 |
+|--------|----------|------|
+| GET | `/api/jobs/pull?role=X&mode=Y` | 대기 중인 작업 가져오기 |
+| POST | `/api/jobs/push` | 작업 결과 제출 |
+| POST | `/api/jobs/create` | 새 작업 생성 (파이프라인 시작) |
+| GET | `/api/jobs/status` | 작업 상태 요약 |
+| GET | `/api/jobs/list` | 최근 작업 목록 |
+
+### 파이프라인 흐름
+
+```
+1. POST /api/jobs/create (CEO 요청)
+   → PM-Worker pending 작업 생성
+   → JSONL 저장: ceo → pm-worker (request)
+
+2. PM-Worker가 pull → 처리 → push
+   → JSONL 저장: pm-worker → pipeline (response)
+   → PM-Reviewer pending 작업 자동 생성
+   → JSONL 저장: pipeline → pm-reviewer (request)
+
+3. PM-Reviewer가 pull → 검증 → push (APPROVE)
+   → JSONL 저장: pm-reviewer → pipeline (review)
+   → CODER-Worker pending 작업 자동 생성
+   → ...
+
+4. 최종 Reviewer가 SHIP
+   → JSONL 저장: pipeline → ceo (complete)
+   → Pipeline 완료
+```
+
+### 핑퐁 방지
+
+```
+MAX_REWORK_ROUNDS = 2
+
+Worker → Reviewer (REVISE) → Worker (재작업)
+Worker → Reviewer (REVISE) → Worker (재작업)
+Worker → Reviewer (REVISE) → CEO 개입 요청 (escalation)
+```
+
+---
+
+## 핵심 설계 원칙
+
+### 1. SQLite 락지옥 방지
+
+```
+❌ 기존: 9개 컨테이너가 SQLite 직접 접근 → 락 충돌
+✅ 변경: DB는 web만 소유, 워커는 HTTP API로 접근
+```
+
+### 2. 권한 분리
+
+```
+coder-worker : ./:/app:rw         # 유일하게 전체 RW
+qa-worker    : ./tests:/app/tests:rw  # tests만 RW
+나머지       : ./:/app:ro         # 읽기 전용
+```
+
+### 3. Claude CLI 구독 사용
+
+```yaml
+# docker-compose.yml
+environment:
+  - ANTHROPIC_API_KEY=  # 비우면 Pro/Max 구독으로 CLI 실행
+```
+
+### 4. 컨텍스트 오염 방지
+
+```
+❌ 세션 이어가기 → 이전 대화가 영향
+✅ TaskSpec 패킷 주입 → 매번 새로운 컨텍스트
+```
+
+---
+
+## Subagent 시스템
+
+### 페르소나 정의
+
+```
+.claude/agents/
+├── pm-reviewer.md      # Skeptic - 전략 의심
+├── coder-worker.md     # Implementer - diff만 출력
+├── coder-reviewer.md   # Devil's Advocate - 코드 반박
+├── qa-worker.md        # Tester - 테스트 작성
+├── qa-reviewer.md      # Breaker - 엣지케이스 공격
+└── security-hawk.md    # Security Hawk - SHIP/HOLD 결정
+```
+
+### Output Styles
+
+```
+.claude/output-styles/
+├── silent-diff.md      # diff만, 설명 금지
+└── verdict-only.md     # APPROVE/REVISE/SHIP/HOLD만
+```
+
+---
+
+## 비용 효율
+
+### 모델 티어별 사용량
+
+| 티어 | 모델 | 사용 비율 | 비용 (per 1M) |
+|------|------|----------|---------------|
+| BUDGET | Gemini 2.0 Flash | 80% | $0.10/$0.40 |
+| STANDARD | Claude Sonnet 4 | 15% | $3/$15 |
+| VIP | Opus 4.5 / GPT Thinking | 5% | $5/$25 |
 
 ### 절감 효과
 
 ```
-💰 절감액: $27.74 (per 1000 requests)
-📉 절감률: 85.9%
-
-월간 예상 (10,000 requests):
-  Before: $323
-  After:  $45.60
-  절감:   $277.40/월
+💰 월간 예상 (10,000 requests):
+   Before: $323
+   After:  $45.60
+   절감:   $277.40/월 (85.9%)
 ```
 
 ---
 
-## 모델 상세 스펙
+## Quick Start (Docker)
 
-### BUDGET: Gemini 2.0 Flash
+```bash
+# 1. .env 설정
+cp .env.example .env
+# API 키 입력
 
-```yaml
-Provider: google
-Model ID: gemini-2.0-flash
-Temperature: 0.7
-Max Tokens: 8192
-Cost: $0.10 input / $0.40 output (per 1M)
+# 2. Docker 빌드 & 실행
+docker-compose up -d --build
 
-Use Cases:
-  - PM 일반 작업
-  - Analyst 로그 분석
-  - 단순 질문/요약/번역
-  - 대용량 컨텍스트 처리
+# 3. 로그 확인
+docker-compose logs -f web
 
-Strengths:
-  - 최저 비용
-  - 빠른 응답
-  - 긴 컨텍스트 지원
+# 4. 테스트
+curl http://localhost:5000/api/health/ping
+
+# 5. 작업 생성
+curl -X POST http://localhost:5000/api/jobs/create \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "Hello", "role": "pm", "mode": "worker"}'
+
+# 6. 종료
+docker-compose down
 ```
-
-### STANDARD: Claude Sonnet 4
-
-```yaml
-Provider: anthropic
-Model ID: claude-sonnet-4-20250514
-Temperature: 0.5
-Max Tokens: 8192
-Cost: $3 input / $15 output (per 1M)
-
-Use Cases:
-  - Coder (코드 수정)
-  - Excavator (의도 정제)
-  - QA 기본 검증
-  - Strategist 초안
-
-Strengths:
-  - 코딩 성능 우수
-  - 논리적 분석
-  - 가성비 최고
-```
-
-### VIP-AUDIT: Claude Opus 4.5
-
-```yaml
-Provider: anthropic
-Model ID: claude-opus-4-5-20251101
-Temperature: 0.3
-Max Tokens: 8192
-Cost: $5 input / $25 output (per 1M)
-
-Trigger Keywords:
-  - api_key, secret, password, credential
-  - 주문, 거래, 잔고, 출금, 입금
-  - 실거래, 배포, production, live
-  - 손실, 리스크, 청산, 레버리지
-
-Use Cases:
-  - 보안 감사
-  - 고위험 코드 리뷰
-  - 배포 전 최종 검토
-```
-
-### VIP-THINKING: GPT-4o
-
-```yaml
-Provider: openai
-Model ID: gpt-4o
-Temperature: 0.2
-Max Tokens: 16384
-Thinking Mode: Enabled
-Cost: $2.50 input / $10 output (per 1M)
-
-Trigger Keywords:
-  - 왜, why, 원인, cause
-  - 분석해, analyze, 추론, infer
-  - 버그 원인, root cause, 디버그
-  - 실패 원인, 괴리, discrepancy
-
-Use Cases:
-  - 복잡한 버그 원인 분석
-  - 논리적 추론 필요
-  - 백테스트-라이브 괴리 분석
-```
-
-### RESEARCH: Perplexity Sonar Pro
-
-```yaml
-Provider: perplexity
-Model ID: sonar-pro
-Temperature: 0.3
-Max Tokens: 8192
-Cost: $3 input / $15 output (per 1M)
-
-Trigger Keywords:
-  - 검색, search, 찾아, find
-  - 최신, latest, 뉴스, trend
-  - 동향, 현황, 실시간
-  - API 변경, breaking change
-
-Use Cases:
-  - 실시간 웹 검색
-  - 라이브러리/API 변경 확인
-  - 시장 동향 조사
-  - 최신 문서 근거 확인
-
-Output:
-  - 검색 결과 + 출처(Sources) 자동 첨부
-```
-
----
-
-## API Endpoints
-
-### Chat Operations
-
-| Method | Endpoint | 설명 |
-|--------|----------|------|
-| POST | `/api/chat` | 단일 턴 대화 |
-| POST | `/api/chat/stream` | 스트리밍 대화 (SSE) |
-| GET | `/api/history` | 현재 세션 히스토리 |
-| POST | `/api/history/clear` | 히스토리 초기화 |
-
-### Router API
-
-| Method | Endpoint | 설명 |
-|--------|----------|------|
-| POST | `/api/router/analyze` | 메시지 라우팅 분석 |
-| GET | `/api/router/stats` | 라우터 설정 통계 |
-
-### Background Tasks
-
-| Method | Endpoint | 설명 |
-|--------|----------|------|
-| POST | `/api/task/start` | 백그라운드 작업 시작 |
-| GET | `/api/task/<id>` | 작업 상태 조회 |
-| GET | `/api/tasks` | 세션별 작업 목록 |
-| POST | `/api/task/<id>/cancel` | 작업 취소 |
-
-### Session Management
-
-| Method | Endpoint | 설명 |
-|--------|----------|------|
-| GET | `/api/sessions` | 세션 목록 |
-| POST | `/api/sessions` | 새 세션 생성 |
-| GET | `/api/sessions/<id>` | 세션 상세 |
-| DELETE | `/api/sessions/<id>` | 세션 삭제 |
 
 ---
 
@@ -294,82 +278,12 @@ Output:
 
 | 파일 | 역할 |
 |------|------|
-| `router.py` | HattzRouter v2.0 - 비용 최적화 라우팅 |
-| `config.py` | 모델 설정, 시스템 프롬프트, CEO 프로필 |
-| `app.py` | Flask API 엔드포인트 |
-| `database.py` | MSSQL 연결 및 CRUD |
-| `stream.py` | 로깅 시스템 (append-only JSONL) |
-| `executor.py` | 코드/명령어 실행 |
-| `rag.py` | RAG + 번역 레이어 |
-| `agent_scorecard.py` | CEO 피드백 기반 점수 시스템 |
+| `docker-compose.yml` | 9개 컨테이너 오케스트레이션 |
+| `src/api/jobs.py` | Jobs API + JSONL 저장 |
+| `src/workers/agent_worker.py` | HTTP 기반 워커 |
+| `src/infra/conversations/stream/` | JSONL 대화 로그 |
+| `.claude/agents/*.md` | Subagent 페르소나 |
 
 ---
 
-## Environment Variables
-
-```bash
-# API Keys
-ANTHROPIC_API_KEY=sk-ant-...
-OPENAI_API_KEY=sk-...
-GOOGLE_API_KEY=AIza...
-PERPLEXITY_API_KEY=pplx-...
-
-# Database
-MSSQL_SERVER=localhost
-MSSQL_DATABASE=HattzEmpire
-MSSQL_USER=...
-MSSQL_PASSWORD=...
-
-# Flask
-FLASK_SECRET_KEY=hattz-empire-secret-key-2024
-```
-
----
-
-## Quick Start
-
-```bash
-# 1. 환경 설정
-cd hattz_empire
-pip install -r requirements.txt
-
-# 2. .env 파일 설정
-cp .env.example .env
-# API 키 입력
-
-# 3. 라우터 테스트
-python router.py
-
-# 4. 서버 실행
-python app.py
-
-# 5. 브라우저 접속
-http://localhost:5000
-```
-
----
-
-## 운영 원칙
-
-### "가난하지만 안 죽는" 전략
-
-```
-1. 기본은 최저가 (Gemini Flash)
-   └─ 80% 작업은 싼 모델로 충분
-
-2. 코딩은 Sonnet (가성비)
-   └─ 코드 품질은 유지하면서 비용 절감
-
-3. VIP는 진짜 필요할 때만
-   └─ 고위험/추론에만 Opus/Thinking
-
-4. 검색은 Perplexity
-   └─ 상시 ON 아니고 트리거 기반
-
-5. 실패 시 자동 승격
-   └─ Budget → Standard → VIP
-```
-
----
-
-*Last Updated: 2026-01-03 | HattzRouter v2.0*
+*Last Updated: 2026-01-06 | Hattz Empire v2.2.1 (Docker + JSONL Persistence)*

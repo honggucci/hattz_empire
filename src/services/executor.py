@@ -938,6 +938,295 @@ def extract_call_info(text: str) -> List[Dict[str, str]]:
 
 
 # =============================================================================
+# Self-Refinement Loop with Committee
+# =============================================================================
+
+@dataclass
+class RefinementResult:
+    """Self-Refinement Loop 결과"""
+    success: bool
+    final_output: str
+    rounds_completed: int
+    committee_votes: Dict[str, str]  # persona -> APPROVE/REVISE
+    draft_output: str  # API 초안
+    refinement_history: List[Dict[str, Any]]
+    error: Optional[str] = None
+
+
+def execute_with_refinement(
+    task: str,
+    role: str,
+    task_id: str = None,
+    session_id: str = None
+) -> RefinementResult:
+    """
+    Self-Refinement Loop 실행
+
+    1단계: API (GPT/Gemini)로 초안 작성
+    2단계: Claude CLI 위원회 (3개 세션)에서 3+ 라운드 검토
+    3단계: 승인 임계값 도달 시 완료
+
+    Args:
+        task: 실행할 태스크
+        role: 역할 (coder/qa/reviewer)
+        task_id: 태스크 ID
+        session_id: 세션 ID
+
+    Returns:
+        RefinementResult
+    """
+    from config import get_committee_config, MODELS
+    from src.services.cli_supervisor import get_supervisor
+
+    # 위원회 설정 가져오기
+    committee_config = get_committee_config(role)
+    if not committee_config:
+        return RefinementResult(
+            success=False,
+            final_output="",
+            rounds_completed=0,
+            committee_votes={},
+            draft_output="",
+            refinement_history=[],
+            error=f"No committee config for role: {role}"
+        )
+
+    supervisor = get_supervisor()
+    refinement_history = []
+    current_output = ""
+
+    # =========================================================================
+    # 1단계: API로 초안 작성
+    # =========================================================================
+    print(f"[Refinement] 1단계: API 초안 작성 (engine: {committee_config['draft_engine']})")
+
+    try:
+        draft_output = _call_draft_api(
+            task=task,
+            role=role,
+            engine_name=committee_config["draft_engine"]
+        )
+        current_output = draft_output
+
+        refinement_history.append({
+            "stage": "draft",
+            "engine": committee_config["draft_engine"],
+            "output": draft_output[:2000]  # 로그용 축약
+        })
+
+        print(f"[Refinement] 초안 완료: {len(draft_output)} chars")
+
+    except Exception as e:
+        return RefinementResult(
+            success=False,
+            final_output="",
+            rounds_completed=0,
+            committee_votes={},
+            draft_output="",
+            refinement_history=[],
+            error=f"Draft API failed: {str(e)}"
+        )
+
+    # =========================================================================
+    # 2단계: Claude CLI 위원회 검토 라운드
+    # =========================================================================
+    min_rounds = committee_config["min_rounds"]
+    max_rounds = committee_config["max_rounds"]
+    approval_threshold = committee_config["approval_threshold"]
+    committee = committee_config["committee"]
+
+    for round_num in range(1, max_rounds + 1):
+        print(f"\n[Refinement] 라운드 {round_num}/{max_rounds}")
+
+        round_context = _build_round_context(refinement_history)
+        round_results = {}
+        approval_count = 0
+
+        # 각 위원회 멤버에게 검토 요청
+        for member in committee:
+            persona = member["persona"]
+            persona_prompt = member["prompt_prefix"]
+
+            print(f"  - {persona} 검토 중...")
+
+            result = supervisor.call_committee_member(
+                prompt=f"""Review this output and provide feedback:
+
+{current_output}
+
+Original task: {task}""",
+                role=role,
+                persona=persona,
+                persona_prompt=persona_prompt,
+                task_id=task_id,
+                context=round_context
+            )
+
+            if result.success:
+                round_results[persona] = result.output
+                # APPROVE 키워드 감지
+                if "APPROVE" in result.output.upper() or "NO ISSUES FOUND" in result.output.upper():
+                    approval_count += 1
+                    print(f"    ✅ {persona}: APPROVE")
+                else:
+                    print(f"    🔧 {persona}: REVISE")
+            else:
+                round_results[persona] = f"ERROR: {result.error}"
+                print(f"    ❌ {persona}: ERROR")
+
+        # 라운드 결과 기록
+        refinement_history.append({
+            "stage": f"round_{round_num}",
+            "results": round_results,
+            "approval_count": approval_count,
+            "threshold": approval_threshold
+        })
+
+        # 승인 임계값 체크
+        if approval_count >= approval_threshold and round_num >= min_rounds:
+            print(f"\n[Refinement] ✅ 승인 완료 (라운드 {round_num}, {approval_count}/{len(committee)} 승인)")
+
+            return RefinementResult(
+                success=True,
+                final_output=current_output,
+                rounds_completed=round_num,
+                committee_votes={m["persona"]: "APPROVE" if "APPROVE" in round_results.get(m["persona"], "").upper() else "REVISE" for m in committee},
+                draft_output=draft_output,
+                refinement_history=refinement_history
+            )
+
+        # 개선 필요 - 피드백 통합
+        if approval_count < approval_threshold:
+            feedback_combined = _combine_feedback(round_results, committee)
+
+            # Implementer에게 개선 요청
+            print(f"  - 피드백 기반 개선 중...")
+
+            improve_result = supervisor.call_committee_member(
+                prompt=f"""Improve the code based on this feedback:
+
+## Current Output:
+{current_output}
+
+## Feedback from Committee:
+{feedback_combined}
+
+## Original Task:
+{task}
+
+Apply the feedback and output the improved version.""",
+                role=role,
+                persona="implementer",
+                persona_prompt=committee[0]["prompt_prefix"],  # Implementer
+                task_id=task_id,
+                context=""
+            )
+
+            if improve_result.success:
+                current_output = improve_result.output
+                print(f"    개선 완료: {len(current_output)} chars")
+
+    # 최대 라운드 초과
+    print(f"\n[Refinement] ⚠️ 최대 라운드 도달 ({max_rounds}), 현재 결과 반환")
+
+    return RefinementResult(
+        success=True,  # 최대 라운드에서도 결과 반환
+        final_output=current_output,
+        rounds_completed=max_rounds,
+        committee_votes={m["persona"]: "TIMEOUT" for m in committee},
+        draft_output=draft_output,
+        refinement_history=refinement_history
+    )
+
+
+def _call_draft_api(task: str, role: str, engine_name: str) -> str:
+    """API로 초안 작성"""
+    from config import MODELS, get_system_prompt
+
+    model_config = MODELS.get(engine_name)
+    if not model_config:
+        raise ValueError(f"Unknown engine: {engine_name}")
+
+    system_prompt = get_system_prompt(role) or f"You are a {role}."
+
+    # Provider별 호출
+    if model_config.provider == "openai":
+        return _call_openai_draft(task, system_prompt, model_config)
+    elif model_config.provider == "google":
+        return _call_gemini_draft(task, system_prompt, model_config)
+    else:
+        raise ValueError(f"Unsupported provider for draft: {model_config.provider}")
+
+
+def _call_openai_draft(task: str, system_prompt: str, model_config) -> str:
+    """OpenAI API 호출"""
+    import os
+    from openai import OpenAI
+
+    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+    response = client.chat.completions.create(
+        model=model_config.model_id,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": task}
+        ],
+        temperature=model_config.temperature,
+        max_tokens=model_config.max_tokens
+    )
+
+    return response.choices[0].message.content
+
+
+def _call_gemini_draft(task: str, system_prompt: str, model_config) -> str:
+    """Gemini API 호출"""
+    import os
+    import google.generativeai as genai
+
+    genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+    model = genai.GenerativeModel(model_config.model_id)
+
+    full_prompt = f"""{system_prompt}
+
+Task: {task}"""
+
+    response = model.generate_content(full_prompt)
+    return response.text
+
+
+def _build_round_context(history: List[Dict[str, Any]]) -> str:
+    """이전 라운드 컨텍스트 구성"""
+    if not history:
+        return ""
+
+    context_parts = []
+    for entry in history[-3:]:  # 최근 3개만
+        stage = entry.get("stage", "unknown")
+        if stage == "draft":
+            context_parts.append(f"[DRAFT] {entry.get('output', '')[:500]}...")
+        elif stage.startswith("round_"):
+            results = entry.get("results", {})
+            approval = entry.get("approval_count", 0)
+            context_parts.append(f"[{stage.upper()}] Approval: {approval}, Feedback summary available")
+
+    return "\n".join(context_parts)
+
+
+def _combine_feedback(round_results: Dict[str, str], committee: List[Dict]) -> str:
+    """위원회 피드백 통합"""
+    feedback_parts = []
+
+    for member in committee:
+        persona = member["persona"]
+        result = round_results.get(persona, "")
+
+        if result and "APPROVE" not in result.upper():
+            feedback_parts.append(f"### {persona.upper()} ({member['role']}):\n{result[:1000]}")
+
+    return "\n\n".join(feedback_parts) if feedback_parts else "No specific feedback."
+
+
+# =============================================================================
 # Main Executor Function (for API endpoint)
 # =============================================================================
 

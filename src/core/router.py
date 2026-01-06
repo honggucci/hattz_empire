@@ -1,15 +1,25 @@
 """
-HattzRouter - Traffic Control System for AI Model Routing (v2.0 Budget Optimized)
+HattzRouter - Traffic Control System for AI Model Routing (v2.1 통장 보호)
 
-비용 최적화 3단 변속기:
-- BUDGET: Gemini 2.0 Flash ($0.10/$0.40) - 80% 일반 작업
-- STANDARD: Claude Sonnet 4 ($3/$15) - 15% 코딩/분석
-- VIP: Opus 4.5 / GPT-5.2 Thinking Extend ($5~$20) - 5% 감사/고난도
-- RESEARCH: Perplexity Sonar Pro ($3/$15) - 트리거 기반 검색
+v2.1 핵심 변경:
+- 키워드만으로 VIP 태우지 않는다. 상황(에러/코드/실행요청)을 보고 라우팅
+- PM/Excavator는 STANDARD (GPT-5.2 pro medium) - 뇌는 싸구려 금지
+- Coder/QA/Reviewer는 EXEC (Claude Code CLI) - 실행부대
+- Analyst/Documentor는 LOG_ONLY (Gemini Flash) - 요약만, 판단 금지
+
+티어 구조 (v2.1):
+- BUDGET: GPT-5 mini - 짧은 질의응답
+- STANDARD: GPT-5.2 pro (medium) - PM/Excavator 기본
+- VIP_THINKING: GPT-5.2 pro (high) - 에러 컨텍스트 + 원인 분석
+- LOG_ONLY: Gemini Flash - 로그/표 요약 전용
+- EXEC: Claude Code CLI - 레포 수정/명령 실행
+- RESEARCH: Perplexity Sonar Pro - 최신/검색
+- SAFETY: Claude Opus 4.5 - 고위험 감사
 
 에스컬레이션 로직:
 - 실패 시 자동 상위 티어 승격
-- 고위험 키워드 감지 시 VIP 강제
+- 고위험 키워드 감지 시 SAFETY 강제
+- "왜" 같은 단어 하나로 VIP 태우지 않음 (에러 컨텍스트 필수)
 """
 
 from dataclasses import dataclass
@@ -39,11 +49,14 @@ class UrgencyLevel(Enum):
 
 
 class ModelTier(Enum):
-    """모델 티어 (비용순)"""
-    BUDGET = "budget"           # 최저가 (Gemini Flash)
-    STANDARD = "standard"       # 표준 (Sonnet)
-    VIP = "vip"                 # 고급 (Opus/Thinking)
+    """모델 티어 v2.1 (비용순)"""
+    BUDGET = "budget"           # 최저가 (GPT-5 mini) - 짧은 질의
+    STANDARD = "standard"       # 표준 (GPT-5.2 pro medium) - PM/Excavator
+    VIP_THINKING = "vip_thinking"  # 추론 (GPT-5.2 pro high) - 에러+원인 분석
+    LOG_ONLY = "log_only"       # 로그 전용 (Gemini Flash) - 요약만, 판단 금지
+    EXEC = "exec"               # 실행부대 (Claude Code CLI) - 레포 수정
     RESEARCH = "research"       # 검색 전용 (Perplexity)
+    SAFETY = "safety"           # 고위험 감지 (VIP-AUDIT)
 
 
 @dataclass
@@ -115,13 +128,13 @@ class HattzRouter:
             max_tokens=8192,
         )
 
-        # VIP-AUDIT: Claude Opus 4.5 - 감사/리뷰 ($5/$25)
+        # VIP-AUDIT (SAFETY): Claude Opus 4.5 - 감사/리뷰 ($5/$25)
         self.VIP_AUDIT_MODEL = ModelSpec(
             name="Claude Opus 4.5",
             provider="anthropic",
             model_id="claude-opus-4-5-20251101",
             api_key_env="ANTHROPIC_API_KEY",
-            tier=ModelTier.VIP,
+            tier=ModelTier.SAFETY,
             cost_input=5.0,
             cost_output=25.0,
             temperature=0.3,
@@ -134,7 +147,7 @@ class HattzRouter:
             provider="openai",
             model_id="gpt-5.2-thinking-extend",
             api_key_env="OPENAI_API_KEY",
-            tier=ModelTier.VIP,
+            tier=ModelTier.VIP_THINKING,
             cost_input=5.0,
             cost_output=20.0,
             temperature=0.2,
@@ -162,51 +175,69 @@ class HattzRouter:
         self.MEDIUM_CONTEXT_THRESHOLD = 10000
 
         # =====================================================================
-        # 에이전트 역할 → 기본 티어 매핑
+        # 에이전트 역할 → 기본 티어 매핑 (v2.1)
         # =====================================================================
         self.agent_to_tier = {
-            # BUDGET (80%) - 일반 작업
-            "pm": ModelTier.BUDGET,           # PM 기본은 싼 모델
-            "analyst": ModelTier.BUDGET,      # 로그 분석
-            "documentor": ModelTier.BUDGET,   # 문서화
+            # STANDARD - 뇌 역할 (GPT-5.2 pro medium)
+            "pm": ModelTier.STANDARD,         # PM은 뇌다. JSON/[CALL]만 출력
+            "excavator": ModelTier.STANDARD,  # 의도 정제 (요구사항/제약/수용기준)
 
-            # STANDARD (15%) - 코딩/정제
-            "coder": ModelTier.STANDARD,      # 코드 수정
-            "excavator": ModelTier.STANDARD,  # 의도 정제
-            "qa": ModelTier.STANDARD,         # QA 기본
-            "strategist": ModelTier.STANDARD, # 전략 초안
+            # VIP_THINKING - 깊은 추론 (GPT-5.2 pro high) - 조건부만
+            "strategist": ModelTier.VIP_THINKING,  # 에러 컨텍스트 있을 때만
 
-            # RESEARCH - 트리거 기반
-            "researcher": ModelTier.RESEARCH, # Perplexity 전용
+            # LOG_ONLY - 눈 역할 (Gemini Flash) - 요약만, 판단 금지
+            "analyst": ModelTier.LOG_ONLY,    # 로그/표 요약 전용
+            "documentor": ModelTier.LOG_ONLY, # 문서 정리 전용
+
+            # EXEC - 실행부대 (Claude Code CLI)
+            "coder": ModelTier.EXEC,          # 코드/패치만 생성
+            "qa": ModelTier.EXEC,             # 테스트/재현/검증
+            "reviewer": ModelTier.EXEC,       # 코드리뷰/리스크
+
+            # RESEARCH - 트리거 기반 (Perplexity)
+            "researcher": ModelTier.RESEARCH,
+
+            # SAFETY - 고위험 (VIP-AUDIT)
+            "security": ModelTier.SAFETY,
         }
 
         # =====================================================================
-        # 고위험 키워드 (VIP 강제 승격)
+        # 고위험 키워드 (SAFETY 강제) - v2.1
         # =====================================================================
         self.high_risk_keywords = [
-            # 보안/금융
-            "api_key", "secret", "password", "credential", "token",
-            "주문", "order", "거래", "trade", "balance", "잔고",
-            "출금", "withdraw", "입금", "deposit", "transfer",
-
-            # 실거래
-            "live", "production", "배포", "deploy", "release",
-            "실거래", "실매매", "real", "prod",
-
-            # 리스크
-            "손실", "loss", "risk", "위험", "레버리지", "leverage",
-            "청산", "liquidation", "margin",
+            "api_key", "apikey", "secret", "private key", "seed phrase",
+            "출금", "실거래", "주문", "withdraw", "transfer",
         ]
 
         # =====================================================================
-        # 추론 필요 키워드 (Thinking 승격)
+        # 실행 키워드 (EXEC 트리거) - v2.1
+        # =====================================================================
+        self.exec_keywords = [
+            "수정", "패치", "diff", "커밋", "commit", "테스트", "pytest", "unittest",
+            "빌드", "build", "docker", "k8s", "kub", "helm", "배포", "deploy",
+        ]
+
+        # =====================================================================
+        # 검색 키워드 (RESEARCH 트리거) - v2.1
+        # =====================================================================
+        self.research_keywords = [
+            "검색", "찾아", "최신", "동향", "뉴스", "verify", "look up",
+        ]
+
+        # =====================================================================
+        # 추론 필요 키워드 (VIP_THINKING 조건부) - v2.1
         # =====================================================================
         self.thinking_keywords = [
-            "왜", "why", "원인", "cause", "이유", "reason",
-            "분석해", "analyze", "추론", "infer", "논리", "logic",
-            "버그 원인", "root cause", "디버그", "debug",
-            "실패 원인", "failure", "괴리", "discrepancy",
+            "왜", "원인", "분석", "why", "reason", "root cause", "디버그", "debug",
         ]
+
+        # =====================================================================
+        # 에러 패턴 (히스토리 체크용) - v2.1
+        # =====================================================================
+        self.error_pattern = re.compile(
+            r"(Traceback|Exception|Error|SparkException|KeyError|Stack trace|SQLSTATE)",
+            re.IGNORECASE
+        )
 
     # =========================================================================
     # 라우팅 로직
@@ -216,69 +247,103 @@ class HattzRouter:
         self,
         message: str,
         agent_role: str = "pm",
-        context_size: int = 0
+        context_size: int = 0,
+        history: list = None
     ) -> RoutingDecision:
         """
-        메시지 + 역할 기반 라우팅
+        메시지 + 역할 기반 라우팅 (v2.1)
 
-        우선순위:
-        0. CEO 프리픽스 (최고/, 검색/) → VIP/Research 강제
-        1. 고위험 키워드 → VIP (Opus)
-        2. 추론 키워드 → VIP (Thinking)
-        3. 검색 키워드 → Research (Perplexity)
-        4. 대용량 컨텍스트 → Budget (Gemini Flash)
-        5. 에이전트 기본 티어
+        우선순위 (v2.1 - 키워드만으로 VIP 태우지 않는다):
+        0. CEO 프리픽스 (최고/, 검색/, 생각/) → 강제 라우팅
+        1. 고위험 키워드 → SAFETY (security 에이전트)
+        2. 검색 키워드 → RESEARCH (Perplexity)
+        3. 실행 의도/코드 감지 → EXEC (Claude Code CLI)
+        4. 짧은 단순 질문 (<20자, 코드 없음) → BUDGET
+        5. 추론 키워드 + 에러 컨텍스트 → VIP_THINKING
+        6. 추론 키워드만 (에러 없음) → STANDARD (VIP 금지)
+        7. 에이전트 기본 티어
+
+        Args:
+            message: 사용자 메시지
+            agent_role: 에이전트 역할
+            context_size: 컨텍스트 크기 (토큰)
+            history: 최근 대화 히스토리 (에러 맥락 체크용)
         """
-        message_lower = message.lower()
+        msg = (message or "").strip()
+        msg_lower = msg.lower()
 
         # 0. CEO 프리픽스 체크 (최우선)
         prefix_result = self._check_ceo_prefix(message)
         if prefix_result:
             return prefix_result
 
-        # 1. 고위험 체크 → VIP-AUDIT 강제
-        if self._is_high_risk(message_lower):
+        # 1. 고위험 체크 → SAFETY 강제
+        if self._is_high_risk(msg_lower):
             return self._create_decision(
                 self.VIP_AUDIT_MODEL,
-                f"High-risk keywords detected → VIP audit",
+                "risk_keyword_detected → SAFETY",
                 context_size,
-                escalate_to=None  # 이미 최고 티어
+                escalate_to=None
             )
 
-        # 2. 추론 필요 체크 → VIP-THINKING
-        if self._needs_thinking(message_lower):
+        # 2. 검색 키워드 체크 → RESEARCH
+        if self._is_research(msg_lower) or agent_role == "researcher":
             return self._create_decision(
-                self.VIP_THINKING_MODEL,
-                f"Reasoning required → Thinking mode",
+                self.RESEARCH_MODEL,
+                "research_trigger → Perplexity",
+                context_size,
+                escalate_to=self.STANDARD_MODEL
+            )
+
+        # 3. 실행 의도/코드 감지 → EXEC (Claude Code CLI)
+        if self._looks_like_code(msg) or self._has_exec_intent(msg_lower):
+            return self._create_decision(
+                self.STANDARD_MODEL,  # EXEC는 Claude CLI로 처리, 여기서는 STANDARD 반환
+                "execution_intent_or_code → EXEC (Claude CLI)",
                 context_size,
                 escalate_to=self.VIP_AUDIT_MODEL
             )
 
-        # 3. 검색 키워드 체크 → RESEARCH
-        if self._is_research(message_lower) or agent_role == "researcher":
+        # 4. 추론 키워드 체크 (맥락 기반) - v2.1 핵심 로직
+        #    ※ 짧은 질문 체크보다 먼저! "왜?" + 에러 컨텍스트면 VIP 태워야 함
+        has_vip_kw = any(kw.lower() in msg_lower for kw in self.thinking_keywords)
+        has_error_ctx = self._has_error_context(history)
+
+        if has_vip_kw and has_error_ctx:
+            # 키워드 + 에러 컨텍스트 → VIP_THINKING
             return self._create_decision(
-                self.RESEARCH_MODEL,
-                f"Research/search required → Perplexity",
+                self.VIP_THINKING_MODEL,
+                "vip_keyword_with_error_context → VIP_THINKING",
                 context_size,
-                escalate_to=self.STANDARD_MODEL
+                escalate_to=self.VIP_AUDIT_MODEL
             )
 
-        # 4. 대용량 컨텍스트 → BUDGET (긴 컨텍스트 처리)
-        if context_size >= self.LARGE_CONTEXT_THRESHOLD:
+        # 5. 추론 키워드만 (에러 없음) → STANDARD (VIP 승격 금지!)
+        if has_vip_kw:
+            return self._create_decision(
+                self.STANDARD_MODEL,
+                "vip_keyword_without_error_context → STANDARD (VIP 금지)",
+                context_size,
+                escalate_to=self.VIP_THINKING_MODEL
+            )
+
+        # 6. 짧은 단순 질문 (<20자, 코드 없음) → BUDGET
+        #    ※ VIP 키워드 체크 후에! "왜?" 같은 건 이미 위에서 처리됨
+        if len(msg) < 20 and not self._looks_like_code(msg):
             return self._create_decision(
                 self.BUDGET_MODEL,
-                f"Large context ({context_size:,} tokens) → Budget model",
+                "short_simple_query → BUDGET",
                 context_size,
                 escalate_to=self.STANDARD_MODEL
             )
 
-        # 5. 에이전트 기본 티어
-        tier = self.agent_to_tier.get(agent_role, ModelTier.BUDGET)
+        # 7. 에이전트 기본 티어
+        tier = self.agent_to_tier.get(agent_role, ModelTier.STANDARD)
         model = self._get_model_by_tier(tier)
 
         return self._create_decision(
             model,
-            f"Agent role '{agent_role}' → {tier.value} tier",
+            f"default → agent '{agent_role}' → {tier.value}",
             context_size,
             escalate_to=self._get_escalation_model(tier)
         )
@@ -352,39 +417,56 @@ class HattzRouter:
         return None
 
     def _is_high_risk(self, message: str) -> bool:
-        """고위험 키워드 체크"""
-        return any(kw in message for kw in self.high_risk_keywords)
+        """고위험 키워드 체크 (v2.1)"""
+        return any(kw.lower() in message for kw in self.high_risk_keywords)
 
-    def _needs_thinking(self, message: str) -> bool:
-        """추론 필요 여부 체크"""
-        return any(kw in message for kw in self.thinking_keywords)
+    def _has_exec_intent(self, message: str) -> bool:
+        """실행 의도 체크 (v2.1) - EXEC 트리거"""
+        return any(kw.lower() in message for kw in self.exec_keywords)
+
+    def _looks_like_code(self, message: str) -> bool:
+        """코드 포함 여부 체크 (v2.1)"""
+        if "```" in message:
+            return True
+        return bool(re.search(r"\b(def|class|SELECT|INSERT|UPDATE|Traceback|Exception)\b", message))
+
+    def _has_error_context(self, history: list = None, window: int = 2) -> bool:
+        """
+        에러 컨텍스트 체크 (v2.1)
+        최근 히스토리에서 실제 에러/예외가 있는지 확인
+        """
+        if not history:
+            return False
+        recent = "\n".join(str(h) for h in history[-window:])
+        return bool(self.error_pattern.search(recent))
 
     def _is_research(self, message: str) -> bool:
-        """검색 필요 여부 체크"""
-        research_keywords = [
-            "검색", "search", "찾아", "find", "알아봐", "조사",
-            "최신", "latest", "뉴스", "news", "트렌드", "trend",
-            "동향", "현황", "실시간", "api 변경", "breaking change",
-        ]
-        return any(kw in message for kw in research_keywords)
+        """검색 필요 여부 체크 (v2.1)"""
+        return any(kw in message for kw in self.research_keywords)
 
     def _get_model_by_tier(self, tier: ModelTier) -> ModelSpec:
-        """티어별 기본 모델"""
+        """티어별 기본 모델 (v2.1)"""
         tier_to_model = {
             ModelTier.BUDGET: self.BUDGET_MODEL,
             ModelTier.STANDARD: self.STANDARD_MODEL,
-            ModelTier.VIP: self.VIP_AUDIT_MODEL,
+            ModelTier.VIP_THINKING: self.VIP_THINKING_MODEL,
+            ModelTier.LOG_ONLY: self.BUDGET_MODEL,     # Gemini Flash
+            ModelTier.EXEC: self.STANDARD_MODEL,       # Claude CLI (실제 호출은 별도)
             ModelTier.RESEARCH: self.RESEARCH_MODEL,
+            ModelTier.SAFETY: self.VIP_AUDIT_MODEL,
         }
-        return tier_to_model.get(tier, self.BUDGET_MODEL)
+        return tier_to_model.get(tier, self.STANDARD_MODEL)
 
     def _get_escalation_model(self, tier: ModelTier) -> Optional[ModelSpec]:
-        """실패 시 승격 모델"""
+        """실패 시 승격 모델 (v2.1)"""
         escalation = {
             ModelTier.BUDGET: self.STANDARD_MODEL,
-            ModelTier.STANDARD: self.VIP_AUDIT_MODEL,
-            ModelTier.VIP: None,  # 최고 티어
+            ModelTier.STANDARD: self.VIP_THINKING_MODEL,
+            ModelTier.VIP_THINKING: self.VIP_AUDIT_MODEL,
+            ModelTier.LOG_ONLY: self.STANDARD_MODEL,
+            ModelTier.EXEC: self.VIP_AUDIT_MODEL,
             ModelTier.RESEARCH: self.STANDARD_MODEL,
+            ModelTier.SAFETY: None,  # 최고 티어
         }
         return escalation.get(tier)
 

@@ -25,6 +25,7 @@ def register_blueprints(app):
     """모든 Blueprint를 앱에 등록"""
     from . import auth, chat, sessions, execute, rag_api, scores, router_api, tasks, breaker, council_api, health, costs, monitor, events
     from .wpcn import wpcn_bp  # WPCN API
+    from .jobs import jobs_bp  # v2.2 Worker Jobs API
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(chat_bp)
@@ -41,3 +42,4 @@ def register_blueprints(app):
     app.register_blueprint(monitor_bp)
     app.register_blueprint(events_bp)  # SSE Events
     app.register_blueprint(wpcn_bp)  # WPCN API
+    app.register_blueprint(jobs_bp)  # v2.2 Worker Jobs API

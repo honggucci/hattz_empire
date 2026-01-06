@@ -1,7 +1,37 @@
-# Hattz Empire - AI Orchestration System
+# Hattz Empire - AI Orchestration System (v2.2.1)
 
 ## 프로젝트 개요
-비용 최적화 AI 팀 오케스트레이션 시스템. 비용 86% 절감 + 품질 유지.
+비용 최적화 AI 팀 오케스트레이션 시스템. 비용 86% 절감 + 품질 유지 + JSONL 영속화.
+
+## v2.2.1 아키텍처 (2026-01-06)
+
+**핵심 철학**: Docker Worker-Reviewer Pair + JSONL 영속화
+- 9개 Docker 컨테이너로 분산 처리
+- DB는 web만 소유, 워커는 HTTP API로 접근
+- 모든 대화가 parent_id로 연결되어 JSONL에 저장
+
+### 모델 티어 시스템 v2.2.1
+```
+BUDGET        Gemini 2.0 Flash      (요약/정리/대용량)
+STANDARD      GPT-5.2 pro (medium)  (PM-Worker 기본)
+VIP-THINKING  GPT-5.2 pro (high)    (에러+원인일 때만)
+EXEC          Claude Code CLI       (Coder/QA/Reviewer 전용)
+RESEARCH      Perplexity Sonar Pro  (최신/검색)
+SAFETY        Claude Opus 4.5       (Security Hawk 감사)
+```
+
+### Worker-Reviewer Pair 매핑
+| Container | LLM | Persona | 권한 |
+|-----------|-----|---------|------|
+| web | - | Control Tower | RW (DB 소유) |
+| pm-worker | GPT-5.2 Thinking | Strategist | RO |
+| pm-reviewer | Claude CLI | Skeptic | RO |
+| coder-worker | Claude CLI | Implementer | **RW** |
+| coder-reviewer | Claude CLI | Devil's Advocate | RO |
+| qa-worker | Claude CLI | Tester | tests/ RW |
+| qa-reviewer | Claude CLI | Breaker | RO |
+| reviewer-worker | Gemini 2.5 Flash | Pragmatist | RO |
+| reviewer-reviewer | Claude CLI | Security Hawk | RO |
 
 ## 기술 스택
 - **Backend**: Flask (Blueprint 구조)
@@ -84,9 +114,35 @@ hattz_empire/
 - 작업 상태: running, success, failed
 - DB에 작업 이력 저장
 
-## 최근 작업 내역 (2026-01-04)
+## 최근 작업 내역
 
-### 세션 5 (최신)
+### 세션 6 (2026-01-06) - Docker + JSONL Persistence
+
+1. **JSONL 영속화 구현** (`src/api/jobs.py`)
+   - `_save_to_jsonl()` 함수 추가
+   - 모든 대화가 `parent_id`로 연결되어 저장
+   - CEO → PM-Worker → PM-Reviewer → ... 체인 추적
+   - 저장 경로: `src/infra/conversations/stream/YYYY-MM-DD.jsonl`
+
+2. **Docker Compose 수정**
+   - YAML 앵커 중복 오류 수정 (각 서비스 명시적 정의)
+   - `docker/Dockerfile.web`: apt-key → gpg --dearmor 방식 변경
+   - `requirements.txt`: psutil 추가
+
+3. **Jobs API 테스트 완료**
+   - POST /api/jobs/create → 작업 생성
+   - GET /api/jobs/pull → 작업 가져오기
+   - POST /api/jobs/push → 결과 제출 (JSONL 저장 + 다음 단계 자동 생성)
+
+4. **문서 업데이트**
+   - `ai_team_아키텍쳐.md` → v2.2.1
+   - `docs/session_backup_20260106.md` 생성
+   - `PROMPT.md` → v2.2.1
+   - `CLAUDE.md` → v2.2.1
+
+---
+
+### 세션 5 (2026-01-04)
 1. **CSS 반응형 추가 수정** - 80% 축소 시에도 버튼 안 잘리도록
    - `.header-left`에 `min-width: 0`, `flex-shrink: 1`, `overflow: hidden`
    - `.status` 텍스트("Ready") 숨김, 점만 표시
@@ -166,10 +222,65 @@ hattz_empire/
 2. 서버 측 Abort 기능 구현
 3. 백그라운드 작업 위젯 추가
 
+## Jobs API (v2.2.1)
+
+Docker 워커들이 HTTP로 작업을 주고받는 핵심 API.
+
+### Endpoints
+| Method | Endpoint | 설명 |
+|--------|----------|------|
+| GET | `/api/jobs/pull?role=X&mode=Y` | 대기 중인 작업 가져오기 |
+| POST | `/api/jobs/push` | 작업 결과 제출 |
+| POST | `/api/jobs/create` | 새 작업 생성 (파이프라인 시작) |
+| GET | `/api/jobs/status` | 작업 상태 요약 |
+
+### 파이프라인 흐름
+```
+CEO → PM-Worker → PM-Reviewer → CODER-Worker → CODER-Reviewer
+    → QA-Worker → QA-Reviewer → Reviewer-Worker → Reviewer-Reviewer → SHIP
+```
+
+### Verdict 규칙
+- **APPROVE**: 다음 단계로 진행
+- **REVISE**: 이전 Worker에게 재작업 요청 (MAX_REWORK_ROUNDS=2)
+- **HOLD**: 파이프라인 중단 + CEO 개입 요청
+- **SHIP**: 최종 승인 (Reviewer-Reviewer만 사용)
+
+### JSONL 영속화
+모든 대화가 `parent_id`로 연결되어 저장:
+```
+저장 경로: src/infra/conversations/stream/YYYY-MM-DD.jsonl
+
+{
+  "id": "msg_20260106_120000_abc123",
+  "t": "2026-01-06T12:00:00.000000",
+  "from_agent": "pm-worker",
+  "to_agent": "pipeline",
+  "type": "response",
+  "content": "TaskSpec: ...",
+  "parent_id": "msg_20260106_115959_def456",
+  "metadata": {"job_id": "...", "verdict": "APPROVE"}
+}
+```
+
 ## 개발 시 참고사항
+
+### 로컬 개발
 - Flask 서버: `python app.py` (포트 5000)
-- ngrok 터널: `ngrok http 5000`
+- ngrok 터널: `ngrok http 5000 --domain=caitlyn-supercivilized-intrudingly.ngrok-free.app`
 - 로그인: admin/admin
+
+### Docker 환경
+```bash
+# 빌드 & 실행
+docker-compose up -d --build
+
+# 로그 확인
+docker-compose logs -f web
+
+# 종료
+docker-compose down
+```
 
 ## CEO 프로필
 - ID: 하홍구 (Hattz)
@@ -178,65 +289,105 @@ hattz_empire/
 
 ---
 
-## V0 위원회 프로토콜 (2026-01-05)
+## Claude Code CLI 체제 (v2.1.1 - Silence the Chatter)
 
-### 위원회 구조
+Claude는 **EXEC(실행부대)**로만 쓴다.
+설계/추론/라우팅(뇌)은 OpenAI API(GPT-5.2 pro)가 담당하고, Claude Code CLI는 **레포를 손으로 만지는 역할**만 한다.
+
+### 공통 규칙 (v2.1.1)
+- 설명/인사/추임새 금지.
+- 기본 출력은 **unified diff**.
+- 코드 외 텍스트는 주석으로만 허용.
+- 비밀키/토큰/자격증명 출력 금지.
+- **불가능하면 `# ABORT: [이유]` 한 줄만 출력.**
+
+### 역할별 모드
+| 역할 | 목표 | 출력 |
+|------|------|------|
+| Coder | TaskSpec → 최소 diff | diff, 주석으로 짧은 근거 |
+| QA | PASS/FAIL 판정 | JSON 또는 테스트 코드 diff |
+| Reviewer | 리스크 차단 | JSON (APPROVE/REQUEST_CHANGES) |
+
+### 서브에이전트 파일 (.claude/agents/)
+| 파일 | 역할 | 허용 도구 | 출력 |
+|------|------|----------|------|
+| `coder.md` | 코드 구현 | Edit, Write, Read, Bash, Glob | diff만 |
+| `qa.md` | 테스트/검증 | Bash, Read, Glob (쓰기 금지) | JSON verdict |
+| `reviewer.md` | 보안/리스크 | Read, Glob, Grep (읽기 전용) | JSON status |
+
+**사용법**: CLI Supervisor가 `--allowedTools`로 프로필별 도구 제한
+
+### 작업 플로우 (권장)
+1. **CEO 입력** → Web/UI로 들어옴
+2. **PM/Router (GPT-5.2 pro)**
+   - 작업 분해 + TaskSpec(JSON) 생성
+   - 필요하면 Strategist(VIP-THINKING)로 조건부 승격
+3. **Coder (Claude Code CLI)**
+   - TaskSpec에 따라 **코드/패치만** 생성
+   - 장문 설명 금지 (주석으로 최소)
+4. **QA (Claude Code CLI)**
+   - 테스트 실행/재현/검증
+   - FAIL이면 Coder로 회귀
+5. **Reviewer (Claude Code CLI)**
+   - 변경 리스크/보안/품질 점검
+   - REQUEST_CHANGES면 Coder로 회귀
+6. **CEO 보고**
+   - 최종 diff/결과/실행 로그만 전달
+
+### Coder "Code Only" 규칙
+- 출력은 가능한 한 unified diff(또는 파일별 변경 내용)만
+- 테스트 코드는 QA가 작성
+- 설명이 필요하면 코드 주석으로만 최소한
+
+### 라우팅 규칙 v2.1
+- "왜" 같은 단어 하나로 VIP 태우지 않음
+- 에러 컨텍스트(Traceback/Exception) + 원인 키워드 → VIP-THINKING
+- 키워드만 있고 에러 없음 → STANDARD로 충분
+
+---
+
+## CLI Supervisor (v2.1.1)
+
+Claude Code CLI 세션 관리 및 장애 복구 시스템.
+
+### 위치
+`src/services/cli_supervisor.py`
+
+### 기능
+1. **타임아웃 감지** - 5분 초과 시 태스크 분할 후 재시도
+2. **컨텍스트 초과 감지** - Gemini로 요약 후 재시도
+3. **자동 재시도** - 최대 2회 (치명적 에러 제외)
+4. **세션 복구** - DB에서 최근 10개 메시지 로드
+5. **ABORT 처리** - `# ABORT: [이유]` 감지 시 PM에게 리포트
+
+### 에러 처리 흐름
 ```
-┌─────────────────────────────────────────────────────────┐
-│                   GPT 위원회 (설계/추론)                 │
-│  ┌───────────┐ ┌───────────┐ ┌───────────┐             │
-│  │ Architect │ │ Analyst   │ │ Skeptic   │             │
-│  │ 큰그림    │ │ 수학/검증 │ │ 반박/까기 │             │
-│  └───────────┘ └───────────┘ └───────────┘             │
-└─────────────────────────────────────────────────────────┘
-                         ↓
-┌─────────────────────────────────────────────────────────┐
-│                  Claude 위원회 (실행/검증)               │
-│  ┌───────────┐ ┌───────────┐ ┌───────────┐             │
-│  │ Coder     │ │ QA        │ │ Reviewer  │             │
-│  │ 코드 구현 │ │ 테스트    │ │ 코드 리뷰 │             │
-│  └───────────┘ └───────────┘ └───────────┘             │
-└─────────────────────────────────────────────────────────┘
+CLI 호출 실패
+    ├─ 컨텍스트 초과? → Gemini 요약 → 재시도
+    ├─ 타임아웃? → 태스크 분할 → 재시도
+    ├─ 치명적 에러? → ABORT (재시도 불가)
+    └─ 일반 에러? → 2초 대기 → 재시도 (max 2회)
+
+최대 재시도 초과 → ABORT 리포트 → PM 에스컬레이션
 ```
 
-### 페르소나 파일 위치
-- `.claude/agents/gpt_architect.md` - 큰그림/아키텍처
-- `.claude/agents/gpt_analyst.md` - 수학/추론/검증
-- `.claude/agents/gpt_skeptic.md` - 악마의 변호인
-- `.claude/agents/claude_coder.md` - 코드 구현
-- `.claude/agents/claude_qa.md` - 품질 보증
-- `.claude/agents/claude_reviewer.md` - 코드 리뷰
+### 사용 예시
+```python
+from src.services.cli_supervisor import call_claude_cli, recover_and_continue
 
-### 작업 플로우
-1. **CEO 요청** → PM 접수
-2. **설계 위원회** (GPT)
-   - Architect: 큰그림/구조 제안
-   - Analyst: 로직/수학 검증
-   - Skeptic: 허점 찾기 → FAIL이면 1로 되돌림
-3. **실행 위원회** (Claude)
-   - Coder: diff 형태로 코드 작성
-   - QA: 테스트/버그 찾기 → FAIL이면 Coder로
-   - Reviewer: 코드 리뷰 → REQUEST_CHANGES면 Coder로
-4. **CEO 보고** → 결과 전달
+# 일반 호출 (llm_caller에서 자동 사용)
+result = call_claude_cli(messages, system_prompt, profile="coder")
 
-### 게이트 규칙 (회귀 방지)
-| 게이트 | 조건 | 실패 시 |
-|--------|------|---------|
-| Skeptic | verdict=FAIL | 설계로 되돌림 |
-| Analyst | confidence < 0.7 | 추가 검증 태스크 |
-| QA | verdict=FAIL | Coder로 리턴 |
-| Reviewer | approval=REQUEST_CHANGES | Coder로 리턴 |
-
-### Codex CLI 연동 (GPT 위원회)
-```bash
-# 프롬프트 파일로 Codex 호출
-echo "설계 요청 내용" | codex exec --json - > result.jsonl
-
-# 결과 파싱해서 위원회 의견으로 반영
+# 세션 복구 후 재개
+result = recover_and_continue(session_id, "이전 작업 계속해줘", profile="coder")
 ```
 
-### 출력 형식
-모든 위원회 멤버는 JSON 형식으로 출력:
-- 구조화된 데이터로 파싱 용이
-- 게이트 조건 자동 체크 가능
-- 히스토리 추적/분석 가능
+### 설정 (cli_supervisor.py)
+```python
+CLI_CONFIG = {
+    "timeout_seconds": 300,      # 5분 타임아웃
+    "max_retries": 2,            # 최대 재시도 횟수
+    "context_recovery_limit": 10, # 복구 시 가져올 메시지 수
+    "output_max_chars": 50000,   # 출력 최대 길이
+}
+```

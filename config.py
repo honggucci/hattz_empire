@@ -1,11 +1,20 @@
 """
-Hattz Empire - AI Orchestration System v2.0
-듀얼 엔진 기반 멀티 AI 팀 구성
+Hattz Empire - AI Orchestration System v2.1.1 (통장 보호 + 주둥이 봉인 에디션)
+비용 86% 절감 + 품질 유지
 
-2026.01.02 업데이트:
-- 모든 역할 듀얼 엔진 구조
-- GPT-5.2 Thinking Extended
-- Gemini 3.0 Pro
+2026.01.05 업데이트 (v2.1.1):
+- PM: GPT-5.2 pro (medium) - max_output_tokens: 320 (주둥이 봉인)
+- Excavator: GPT-5.2 pro (medium) - max_output_tokens: 520
+- Strategist: GPT-5.2 pro (high) - max_output_tokens: 900 (조건부)
+- Analyst/Documentor: Gemini 2.0 Flash - LOG_ONLY (요약만, 판단 금지)
+- Coder/QA/Reviewer: Claude Code CLI - EXEC (diff만, ABORT 탈출구)
+- Researcher: Perplexity Sonar Pro - max_output_tokens: 900
+
+핵심 철학:
+- 뇌(PM/Excavator)는 싸구려 금지
+- 코드는 Claude CLI로 (API 토큰 격리)
+- VIP는 에러 컨텍스트 있을 때만
+- 출력은 JSON/diff만 (Strict output)
 """
 from dataclasses import dataclass, field
 from typing import Optional
@@ -93,6 +102,95 @@ CEO_PROFILE = """
 # PM → CEO 결과 보고       | 한글
 #
 # =============================================================================
+
+
+# =============================================================================
+# AGENT_CONFIG v2.1.1 - 에이전트별 모델/티어 설정 (주둥이 봉인 강화)
+# =============================================================================
+
+AGENT_CONFIG = {
+    # PM = 뇌. Thinking Extend 모드로 깊은 사고 + JSON 출력
+    "pm": {
+        "provider": "openai_responses",
+        "model": "gpt-5.2-pro",
+        "tier": "VIP_THINKING",
+        "reasoning_effort": "high",  # v2.2: medium → high (Thinking Extend)
+        "temperature": 0.2,
+        "max_output_tokens": 520,  # v2.2: 320→520 (thinking 출력 고려)
+        "prompt_id": "prompt_pm_v2_1",
+    },
+
+    # 의도 정제(요구사항/제약/수용기준) - Thinking Extend
+    "excavator": {
+        "provider": "openai_responses",
+        "model": "gpt-5.2-pro",
+        "tier": "VIP_THINKING",
+        "reasoning_effort": "high",  # v2.2: medium → high (Thinking Extend)
+        "temperature": 0.2,
+        "max_output_tokens": 600,  # v2.2: 520→600 (thinking 출력 고려)
+        "prompt_id": "prompt_excavator_v2_1",
+    },
+
+    # 깊은 원인분석은 조건부(에러 컨텍스트 있을 때만)
+    "strategist": {
+        "provider": "openai_responses",
+        "model": "gpt-5.2-pro",
+        "tier": "VIP_THINKING",
+        "reasoning_effort": "high",  # 필요시 xhigh
+        "temperature": 0.2,
+        "max_output_tokens": 900,  # v2.1.1: 1200→900
+        "prompt_id": "prompt_strategist_v2_1",
+    },
+
+    # 로그/긴 텍스트 요약 전용 (의사결정 금지)
+    "analyst": {
+        "provider": "google",
+        "model": "gemini-2.5-flash",  # v2.1.1: gemini-2.0-flash → gemini-2.5-flash
+        "tier": "LOG_ONLY",
+        "temperature": 0.1,
+        "max_output_tokens": 520,  # v2.1.1: 600→520
+        "prompt_id": "prompt_analyst_logonly_v2_1",
+    },
+
+    "documentor": {
+        "provider": "google",
+        "model": "gemini-2.5-flash",  # v2.1.1: gemini-2.0-flash → gemini-2.5-flash
+        "tier": "LOG_ONLY",
+        "temperature": 0.1,
+        "max_output_tokens": 700,  # v2.1.1: 900→700
+        "prompt_id": "prompt_documentor_v2_1",
+    },
+
+    # 코드 실행부대 = Claude Code CLI
+    "coder": {
+        "provider": "claude_cli",
+        "tier": "EXEC",
+        "profile": "coder",
+        "prompt_id": "prompt_coder_codeonly_v2_1",
+    },
+    "qa": {
+        "provider": "claude_cli",
+        "tier": "EXEC",
+        "profile": "qa",
+        "prompt_id": "prompt_qa_v2_1",
+    },
+    "reviewer": {
+        "provider": "claude_cli",
+        "tier": "EXEC",
+        "profile": "reviewer",
+        "prompt_id": "prompt_reviewer_v2_1",
+    },
+
+    # 최신 검색
+    "researcher": {
+        "provider": "perplexity",
+        "tier": "RESEARCH",
+        "model": "sonar-pro",
+        "temperature": 0.2,
+        "max_output_tokens": 900,  # v2.1.1: 1200→900
+        "prompt_id": "prompt_researcher_v2_1",
+    },
+}
 
 
 # =============================================================================
@@ -237,8 +335,8 @@ DUAL_ENGINES = {
 # =============================================================================
 
 SINGLE_ENGINES = {
-    "pm": MODELS["claude_haiku"],          # 기본 채팅 (비용 절감), VIP 프리픽스로 Opus 사용
-    "analyst": MODELS["gemini_flash"],     # 로그 분석 + 시스템 모니터링
+    "pm": MODELS["claude_sonnet"],         # PM은 뇌다. 비용 아끼지 마라.
+    "analyst": MODELS["gemini_flash"],     # 로그 분석은 싼 거 써 (눈 역할)
 }
 
 
@@ -364,116 +462,35 @@ confidence: 0.85
 ```
 """,
 
-    "coder": """You are the Coder of Hattz Empire (DUAL ENGINE: Claude Opus + GPT-5.2).
+    "coder": """You are the Coder of Hattz Empire. CODE ONLY.
 
-## Dual Temperament System
-### Engine 1 (Claude - Primary): Perfectionist + Pragmatist
-- "깔끔하게, 근데 끝내자"
-- 과도한 추상화/프레임워크 욕심 금지
-- 설계 요약(5줄) + 코드 + 테스트 3개 + 변경 영향
-
-### Engine 2 (GPT - Reviewer): Skeptic + Perfectionist
-- "왜 이렇게 했지?"
-- 전면 재설계 금지 → 버그/엣지케이스/누락만 지적
-- 수정안 필수
-
-## Critical Stance (비판적 스탠스)
-- "이 코드가 프로덕션에서 터질 시나리오는?"
-- 해피 패스만 테스트하면 실패
-- 엣지케이스 3개 이상 필수
-
-## Your Mission
-클린하고 효율적인 코드를 작성하라.
-단, 모든 코드에 "이게 어떻게 터지는지"를 먼저 생각하라.
-
-## ⚡ EXECUTION CAPABILITY (실행 기능)
-너는 [EXEC] 태그를 사용해서 실제로 파일을 읽고, 수정하고, 명령어를 실행할 수 있다.
-
-### [EXEC] 태그 사용법:
-1. **파일 읽기**: [EXEC:read:파일경로]
-   예: [EXEC:read:C:/Users/hahonggu/Desktop/coin_master/projects/wpcn/main.py]
-
-2. **파일 쓰기**: [EXEC:write:파일경로] + 코드블록
-   예:
-   [EXEC:write:C:/Users/hahonggu/Desktop/coin_master/projects/wpcn/utils.py]
-   ```python
-   def helper():
-       return "new code"
-   ```
-
-3. **명령어 실행**: [EXEC:run:명령어]
-   예: [EXEC:run:git status]
-   예: [EXEC:run:pytest tests/]
-   예: [EXEC:run:python -m mypy src/]
-
-4. **디렉토리 목록**: [EXEC:list:디렉토리경로]
-   예: [EXEC:list:C:/Users/hahonggu/Desktop/coin_master/projects/wpcn]
-
-### 허용된 명령어:
-- Git: git status, git diff, git add, git commit, git push, git pull, git branch
-- Python: python, pytest, pip, mypy, black, flake8
-- Node: npm, npx, node, yarn
-
-### 실행 플로우:
-1. 먼저 파일/코드 상태 확인 [EXEC:read] 또는 [EXEC:list]
-2. 코드 작성/수정 [EXEC:write]
-3. 테스트 실행 [EXEC:run:pytest]
-4. 결과 확인 후 필요시 수정
+## 🚨 CRITICAL RULES (돈 아끼는 규칙)
+1. **코드만 뱉어라** - 설계 요약, 테스트 케이스 설명은 토큰 낭비
+2. 설명은 **코드 주석**으로 달아라
+3. 테스트는 **QA가 짠다** - 네가 할 일 아님
+4. YAML 출력 금지 - 코드블록만 출력
 
 ## Standards
-- Python 3.12+
-- Type hints 필수
-- Docstrings (Google style)
-- 테스트 가능한 구조
-- 엣지케이스 처리 필수
+- Python 3.12+, Type hints
+- Docstrings (간결하게)
+- 엣지케이스는 코드로 처리 (설명 X)
 
-## Self-Review Checklist (코드 작성 후 필수)
-1. 입력이 None/빈값이면?
-2. 타입이 예상과 다르면?
-3. 네트워크/DB 연결이 끊기면?
-4. 동시 접근하면?
-5. 메모리/시간 제한 초과하면?
+## Output Format
+```python
+# 파일: 경로/파일명.py
+# 한줄 설명
 
-## Output Format (YAML)
-```yaml
-design_summary: |
-  5줄 이내 설계 요약
+def function_name(param: Type) -> ReturnType:
+    \"\"\"간결한 docstring\"\"\"
+    # 엣지케이스 처리
+    if not param:
+        raise ValueError("...")
 
-execution_plan:  # 실행 계획 (NEW)
-  - action: "read/write/run"
-    target: "대상"
-    purpose: "목적"
-
-implementation:
-  files_created: []
-  files_modified: []
-  dependencies: []
-
-edge_cases_handled:
-  - case: "입력이 None"
-    handling: "처리 방법"
-  - case: "빈 리스트"
-    handling: "처리 방법"
-
-potential_failures:  # 터질 수 있는 시나리오
-  - scenario: "시나리오"
-    mitigation: "방어 코드"
-
-tests:
-  - name: "테스트명"
-    type: "unit/integration/edge"
-    scenario: "시나리오"
-
-code_review:
-  complexity: "low/medium/high"
-  test_coverage: "설명"
-
-change_impact:
-  - "이 변경이 영향주는 곳"
-
-notes:
-  - "구현 관련 노트"
+    # 핵심 로직
+    ...
 ```
+
+주석으로 필요한 것만 설명해라. YAML/마크다운 설명 금지.
 """,
 
     "qa_logic": """You are QA-Logic of Hattz Empire (GPT-5.2 Thinking).
@@ -723,28 +740,23 @@ RSI 다이버전스 트레이딩 전략의 최신 연구와 백테스트 결과�
 4. 리스크 (RISKS)
 5. 롤백 조건 (ROLLBACK IF)
 
-## Output Format (YAML)
-```yaml
-sprint_plan:
-  do:
-    - "해야 할 것 1"
-    - "해야 할 것 2"
-    - "해야 할 것 3"
-  dont:
-    - "하지 말 것 1"
-    - "하지 말 것 2"
-    - "하지 말 것 3"
-  success_criteria:
-    - "성공 기준"
-  risks:
-    - risk: "리스크"
-      mitigation: "대응"
-  rollback_if: "이 조건이면 철수"
+## 🚨 OUTPUT RULES (토큰 아끼는 규칙)
+1. **말 길게 하면 해고** - $4.13 남았다
+2. **JSON 또는 [CALL] 태그만** - 인사말, 추임새, "알겠습니다" 금지
+3. **CEO에게 직접 보고할 때만 한글** - 에이전트 간은 영어 간결하게
 
-delegation:
-  - agent: "strategist/coder/qa_logic/qa_security"
-    task: "위임할 작업"
-    deadline: "기한"
+## Output Format
+```
+[CALL:agent]
+(작업 지시 - 간결하게)
+[/CALL]
+```
+
+또는 CEO 직접 보고 시:
+```
+🎯 핵심 (1줄)
+✅ 완료/⚠️ 주의/❌ 실패
+📌 다음 액션
 ```
 
 ## ⚠️ IMPORTANT: Project Paths (절대 추측하지 말 것!)
@@ -1167,6 +1179,123 @@ PROJECTS = {
         "path": "C:/Users/hahonggu/Desktop/coin_master/projects/test",
     },
 }
+
+
+# =============================================================================
+# COMMITTEE CONFIG v2.2 - Self-Refinement Loop with CLI Committees
+# =============================================================================
+# 각 역할별 3인 위원회 구성
+# 1단계: API (GPT/Gemini)로 초안 작성
+# 2단계: Claude CLI 위원회 (3개 세션)에서 3+ 라운드 검토
+# 결과: 처음엔 실수해도 최종 완벽한 산출물
+
+COMMITTEE_CONFIG = {
+    # =========================================================================
+    # CODER 위원회: 코드 품질 극대화
+    # =========================================================================
+    "coder": {
+        "draft_engine": "gpt_thinking",  # 초안: GPT-5.2 Thinking
+        "committee": [
+            {
+                "persona": "implementer",
+                "role": "초안 작성자",
+                "prompt_prefix": """You are the IMPLEMENTER. Write clean, working code.
+Focus on: correctness, readability, type hints.
+Output: Code only, minimal comments.""",
+            },
+            {
+                "persona": "devils_advocate",
+                "role": "반박자",
+                "prompt_prefix": """You are the DEVIL'S ADVOCATE. Challenge everything.
+Focus on: edge cases, failure modes, "what if this breaks?"
+Output: List of issues found, each with severity and fix suggestion.
+If code is solid, say "NO ISSUES FOUND" (rare).""",
+            },
+            {
+                "persona": "perfectionist",
+                "role": "품질 검증자",
+                "prompt_prefix": """You are the PERFECTIONIST. Nothing escapes your review.
+Focus on: missed edge cases, performance, maintainability.
+Output: Final verdict (APPROVE/REVISE) + improvement suggestions.
+Be harsh but constructive.""",
+            },
+        ],
+        "min_rounds": 3,  # 최소 3라운드 검토
+        "max_rounds": 5,  # 최대 5라운드
+        "approval_threshold": 2,  # 2/3 승인 필요
+    },
+
+    # =========================================================================
+    # QA 위원회: 버그 제로
+    # =========================================================================
+    "qa": {
+        "draft_engine": "gpt_thinking",  # 초안: GPT-5.2 Thinking
+        "committee": [
+            {
+                "persona": "tester",
+                "role": "테스트 작성자",
+                "prompt_prefix": """You are the TESTER. Write comprehensive tests.
+Focus on: unit tests, integration tests, edge cases.
+Output: pytest code with clear test names.""",
+            },
+            {
+                "persona": "breaker",
+                "role": "파괴자",
+                "prompt_prefix": """You are the BREAKER. Your job is to break the code.
+Focus on: unusual inputs, race conditions, state corruption.
+Output: Attack vectors that could break the code.""",
+            },
+            {
+                "persona": "coverage_hawk",
+                "role": "커버리지 감시자",
+                "prompt_prefix": """You are the COVERAGE HAWK. No code path escapes testing.
+Focus on: untested branches, missing assertions, boundary conditions.
+Output: Coverage gaps and required additional tests.""",
+            },
+        ],
+        "min_rounds": 3,
+        "max_rounds": 5,
+        "approval_threshold": 2,
+    },
+
+    # =========================================================================
+    # REVIEWER 위원회: 배포 전 최종 관문
+    # =========================================================================
+    "reviewer": {
+        "draft_engine": "gemini_flash",  # 초안: Gemini 2.5 Flash (대용량 코드 분석)
+        "committee": [
+            {
+                "persona": "security_hawk",
+                "role": "보안 전문가",
+                "prompt_prefix": """You are the SECURITY HAWK. Find vulnerabilities.
+Focus on: OWASP Top 10, injection, auth bypass, data exposure.
+Output: Vulnerabilities with severity (CRITICAL/HIGH/MEDIUM/LOW).""",
+            },
+            {
+                "persona": "performance_critic",
+                "role": "성능 비평가",
+                "prompt_prefix": """You are the PERFORMANCE CRITIC. Optimize everything.
+Focus on: N+1 queries, memory leaks, O(n²) algorithms, blocking calls.
+Output: Performance issues with impact assessment.""",
+            },
+            {
+                "persona": "pragmatist",
+                "role": "현실주의자",
+                "prompt_prefix": """You are the PRAGMATIST. Balance quality vs shipping.
+Focus on: is it good enough? what's the real risk? over-engineering?
+Output: Final SHIP/HOLD decision with rationale.""",
+            },
+        ],
+        "min_rounds": 2,  # 리뷰는 2라운드면 충분
+        "max_rounds": 4,
+        "approval_threshold": 2,
+    },
+}
+
+
+def get_committee_config(role: str) -> Optional[dict]:
+    """위원회 설정 가져오기"""
+    return COMMITTEE_CONFIG.get(role)
 
 
 # =============================================================================

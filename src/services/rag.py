@@ -193,12 +193,14 @@ class SearchResult:
 
 def get_connection():
     """MSSQL 연결"""
+    driver = os.getenv("ODBC_DRIVER", "ODBC Driver 18 for SQL Server")
     conn_str = (
-        f"DRIVER={{ODBC Driver 17 for SQL Server}};"
+        f"DRIVER={{{driver}}};"
         f"SERVER={os.getenv('MSSQL_SERVER')};"
         f"DATABASE={os.getenv('MSSQL_DATABASE')};"
         f"UID={os.getenv('MSSQL_USER')};"
         f"PWD={os.getenv('MSSQL_PASSWORD')};"
+        f"TrustServerCertificate=yes;"
     )
     return pyodbc.connect(conn_str)
 

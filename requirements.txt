@@ -19,3 +19,4 @@ pyodbc>=5.0.0
 # Utilities
 pyyaml>=6.0
 requests>=2.31.0
+psutil>=5.9.0
