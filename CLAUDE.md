@@ -1,7 +1,78 @@
-# Hattz Empire - AI Orchestration System (v2.3)
+# Hattz Empire - AI Orchestration System (v2.4)
 
 ## 프로젝트 개요
 비용 최적화 AI 팀 오케스트레이션 시스템. 비용 86% 절감 + 품질 유지 + JSONL 영속화.
+
+## v2.4 아키텍처 (2026-01-07)
+
+**핵심 변경**: Dual Engine V3 + Persona Pack + CEO→PM Only Routing
+
+### v2.4 신규 변경사항
+
+1. **Dual Engine V3**: Write → Audit → Rewrite 패턴 (붙여넣기 방식 폐기)
+2. **Persona Pack**: 역할별 JSON 출력 강제 페르소나 (.claude/agents/*.md)
+3. **CEO→PM Only Routing**: CEO는 PM만 호출 가능, 하위 에이전트 직접 호출 차단
+4. **GPT-5 mini 제거**: 모든 Auditor를 Claude CLI Sonnet 4로 통일
+5. **Researcher Writer**: Perplexity Sonar Pro로 변경 (Gemini Flash → Perplexity)
+
+### 모델 티어 시스템 v2.4
+```
+BUDGET        Gemini 2.0 Flash         (Analyst 로그 압축)
+EXEC          Claude CLI Opus 4.5      (Coder Writer)
+              Claude CLI Sonnet 4      (PM, QA, Auditor, Stamp, Council)
+VIP-THINKING  GPT-5.2 Thinking Extended(Strategist/Excavator Writer)
+RESEARCH      Perplexity Sonar Pro     (Researcher Writer, "검색/" 프리픽스)
+VIP-AUDIT     Claude CLI Opus 4.5      ("최고/" 프리픽스)
+```
+
+### Dual Engine 역할별 모델 매핑
+| 역할 | Writer | Auditor | Stamp |
+|------|--------|---------|-------|
+| coder | Claude CLI Opus 4.5 (coder) | Claude CLI Sonnet 4 (reviewer) | Claude CLI Sonnet 4 |
+| strategist | GPT-5.2 Thinking Extended | Claude CLI Sonnet 4 | Claude CLI Sonnet 4 |
+| qa | Claude CLI Sonnet 4 (qa) | Claude CLI Sonnet 4 | Claude CLI Sonnet 4 |
+| researcher | Perplexity Sonar Pro | Claude CLI Sonnet 4 | Claude CLI Sonnet 4 |
+| excavator | GPT-5.2 Thinking Extended | Claude CLI Sonnet 4 | Claude CLI Sonnet 4 |
+
+### Single Engine
+| 역할 | 모델 | 설명 |
+|------|------|------|
+| pm | Claude CLI Sonnet 4 (reviewer) | Bureaucrat Router |
+| analyst | Gemini 2.0 Flash | Log Summarizer |
+
+### Persona Pack (.claude/agents/)
+```
+.claude/agents/
+├── GLOBAL_RULES.md      # 공통 헌법
+├── pm.md                # Bureaucrat Router
+├── coder.md             # Silent Implementer (Opus 4.5)
+├── stamp.md             # Strict Verdict Clerk
+├── coder-reviewer.md    # Devil's Advocate
+├── qa.md                # Test Designer
+├── qa-reviewer.md       # Breaker
+├── strategist.md        # Systems Architect
+├── excavator.md         # Requirements Interrogator
+├── researcher.md        # Source Harvester (Perplexity)
+├── analyst.md           # Log Summarizer (Gemini)
+└── council.md           # 7-member Jury
+```
+
+### CEO 라우팅 규칙
+```
+CEO ─────┬──→ PM ✅ (유일하게 허용)
+         │
+         ├──✗ Coder      ❌ 차단
+         ├──✗ QA         ❌ 차단
+         ├──✗ Strategist ❌ 차단
+         └──✗ ...        ❌ 차단
+
+PM ──────┬──→ [CALL:coder]      ✅ (_internal_call=True)
+         ├──→ [CALL:qa]         ✅
+         ├──→ [CALL:strategist] ✅
+         └──→ ...               ✅
+```
+
+---
 
 ## v2.3 아키텍처 (2026-01-06)
 
@@ -189,6 +260,38 @@ hattz_empire/
 - DB에 작업 이력 저장
 
 ## 최근 작업 내역
+
+### 세션 8 (2026-01-07) - v2.4 Dual Engine V3 + Persona Pack
+
+Dual Engine V3 아키텍처 완성 및 페르소나 시스템 구축:
+
+1. **Dual Engine V3 패턴**
+   - Write → Audit → Rewrite (붙여넣기 방식 폐기)
+   - Auditor JSON verdict: `APPROVE | REVISE | REJECT`
+   - max 3회 rewrite 후 Council 소집
+
+2. **Persona Pack 생성** (`.claude/agents/`)
+   - `GLOBAL_RULES.md`: 공통 헌법 (잡담 금지, JSON 출력, CEO 에스컬레이션 조건)
+   - 12개 페르소나 파일 생성/업데이트
+
+3. **모델 변경**
+   - Researcher Writer: Gemini Flash → Perplexity Sonar Pro
+   - Coder Writer: Claude CLI Opus 4.5 확인 (coder profile)
+   - 모든 Auditor: Claude CLI Sonnet 4로 통일
+
+4. **CEO→PM Only Routing**
+   - CEO는 PM만 직접 호출 가능
+   - 하위 에이전트는 PM의 `[CALL:*]` 태그로만 호출
+
+5. **Docker 수정**
+   - `Dockerfile.monitor`: COPY 경로 수정 (`docker/` prefix)
+   - grafana 권한: `grafana:grafana` → `472:0`
+
+6. **문서 업데이트**
+   - `ai_team_아키텍쳐.md` → v2.4
+   - `CLAUDE.md` → v2.4
+
+---
 
 ### 세션 7-3 (2026-01-06) - v2.3.1 위원회 DB 저장 + 임베딩
 

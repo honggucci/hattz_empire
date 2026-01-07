@@ -1,0 +1,80 @@
+# Hattz Empire - Prometheus Configuration
+# 에이전트 + 컨테이너 모니터링
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+alerting:
+  alertmanagers: []
+
+rule_files: []
+
+scrape_configs:
+  # Flask Web 서버 메트릭
+  - job_name: 'hattz-web'
+    static_configs:
+      - targets: ['web:5000']
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+
+  # PM Worker
+  - job_name: 'pm-worker'
+    static_configs:
+      - targets: ['pm-worker:5000']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  # PM Reviewer
+  - job_name: 'pm-reviewer'
+    static_configs:
+      - targets: ['pm-reviewer:5000']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  # Coder Worker
+  - job_name: 'coder-worker'
+    static_configs:
+      - targets: ['coder-worker:5000']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  # Coder Reviewer
+  - job_name: 'coder-reviewer'
+    static_configs:
+      - targets: ['coder-reviewer:5000']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  # QA Worker
+  - job_name: 'qa-worker'
+    static_configs:
+      - targets: ['qa-worker:5000']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  # QA Reviewer
+  - job_name: 'qa-reviewer'
+    static_configs:
+      - targets: ['qa-reviewer:5000']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  # Reviewer Worker
+  - job_name: 'reviewer-worker'
+    static_configs:
+      - targets: ['reviewer-worker:5000']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  # Reviewer Reviewer
+  - job_name: 'reviewer-reviewer'
+    static_configs:
+      - targets: ['reviewer-reviewer:5000']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  # Prometheus 자체 메트릭
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']

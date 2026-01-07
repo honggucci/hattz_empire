@@ -1,0 +1,49 @@
+# Hattz Empire - Monitoring Container
+# Prometheus + Grafana (All-in-One)
+
+FROM prom/prometheus:v2.47.0 AS prometheus
+
+FROM grafana/grafana:10.2.0
+
+# Root로 전환하여 패키지 설치
+USER root
+
+# Prometheus 바이너리 복사
+COPY --from=prometheus /bin/prometheus /bin/prometheus
+COPY --from=prometheus /bin/promtool /bin/promtool
+COPY --from=prometheus /etc/prometheus /etc/prometheus
+COPY --from=prometheus /usr/share/prometheus /usr/share/prometheus
+
+# Supervisor 설치
+RUN apk add --no-cache supervisor curl
+
+# 디렉토리 생성
+RUN mkdir -p /var/lib/prometheus /var/log/supervisor /etc/supervisor.d
+
+# Prometheus 설정 복사
+COPY docker/prometheus/prometheus.yml /etc/prometheus/prometheus.yml
+
+# Grafana 대시보드 프로비저닝
+COPY docker/grafana/provisioning /etc/grafana/provisioning
+COPY docker/grafana/dashboards /var/lib/grafana/dashboards
+
+# Supervisor 설정
+COPY docker/monitor-supervisord.conf /etc/supervisor.d/monitor.ini
+
+# Grafana 환경변수
+ENV GF_SECURITY_ADMIN_USER=admin
+ENV GF_SECURITY_ADMIN_PASSWORD=hattz123
+ENV GF_USERS_ALLOW_SIGN_UP=false
+ENV GF_AUTH_ANONYMOUS_ENABLED=true
+ENV GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+
+# 권한 설정 (grafana 이미지 기본 uid:gid = 472:0)
+RUN chown -R 472:0 /var/lib/grafana && \
+    chown -R nobody:nobody /var/lib/prometheus
+
+# 포트 노출
+# Prometheus: 9090, Grafana: 3000
+EXPOSE 9090 3000
+
+# Supervisor로 두 서비스 실행
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor.d/monitor.ini"]

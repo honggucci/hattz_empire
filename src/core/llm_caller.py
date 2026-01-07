@@ -30,97 +30,102 @@ from config import (
 # 듀얼 엔진 + 위원회 설정
 # =============================================================================
 
-# 듀얼 엔진 역할 정의 (Writer + Auditor)
+# 듀얼 엔진 역할 정의 (Writer + Auditor + Stamp)
+# v2.4.3: GPT-5 mini 제거, Stamp = Sonnet 4 통일
+# - Opus: "만드는 손" (coder)
+# - Sonnet 4: "검열/도장" (auditor, stamp)
+# - GPT-5.2 Thinking: "뇌" (strategist/excavator writer)
+# - Gemini Flash: "수집기" (researcher writer)
 DUAL_ENGINE_ROLES = {
     "coder": {
-        "writer": "claude_sonnet",      # Sonnet 4 - 빠른 코드 작성
-        "auditor": "gpt_5_mini",         # GPT-5 mini - 저렴한 리뷰
-        "description": "코드 작성 + 리뷰"
+        "writer": "claude_cli",           # CLI Opus - silent_implementer
+        "auditor": "claude_cli",           # CLI Sonnet 4 - devils_advocate_reviewer
+        "stamp": "claude_cli",             # CLI Sonnet 4 - strict_verdict_clerk
+        "description": "코드 작성 + 리뷰 + 도장",
+        "writer_profile": "coder",         # Opus
+        "auditor_profile": "reviewer",     # Sonnet 4
+        "stamp_profile": "reviewer",       # Sonnet 4
     },
     "strategist": {
-        "writer": "gpt_thinking",        # GPT-5.2 Thinking - 전략 수립
-        "auditor": "claude_sonnet",      # Sonnet - 전략 검증
-        "description": "전략 수립 + 검증"
+        "writer": "gpt_thinking",          # GPT-5.2 Thinking Extended - systems_architect (뇌)
+        "auditor": "claude_cli",           # CLI Sonnet 4 - reality_check_cto
+        "stamp": "claude_cli",             # CLI Sonnet 4 - strict_verdict_clerk
+        "description": "전략 수립 (뇌) + 검증 + 도장",
+        "auditor_profile": "reviewer",     # Sonnet 4
+        "stamp_profile": "reviewer",       # Sonnet 4
     },
     "qa": {
-        "writer": "gpt_5_mini",          # GPT-5 mini - 빠른 테스트 생성
-        "auditor": "claude_sonnet",      # Sonnet - 보안/엣지케이스 검증
-        "description": "테스트 생성 + 검증"
+        "writer": "claude_cli",            # CLI Sonnet 4 - test_designer
+        "auditor": "claude_cli",           # CLI Sonnet 4 - breaker_qa
+        "stamp": "claude_cli",             # CLI Sonnet 4 - strict_verdict_clerk
+        "description": "테스트 생성 + 검증 + 도장",
+        "writer_profile": "qa",            # Sonnet 4
+        "auditor_profile": "reviewer",     # Sonnet 4
+        "stamp_profile": "reviewer",       # Sonnet 4
     },
     "researcher": {
-        "writer": "gemini_flash",        # Gemini 3 Flash - 검색/수집
-        "auditor": "gpt_5_mini",         # GPT-5 mini - 팩트체크
-        "description": "리서치 + 검증"
+        "writer": "perplexity_sonar",      # Perplexity Sonar Pro - source_harvester (검색 특화)
+        "auditor": "claude_cli",           # CLI Sonnet 4 - fact_sentinel
+        "stamp": "claude_cli",             # CLI Sonnet 4 - strict_verdict_clerk
+        "description": "리서치 (Perplexity) + 팩트체크 + 도장",
+        "auditor_profile": "reviewer",     # Sonnet 4
+        "stamp_profile": "reviewer",       # Sonnet 4
     },
     "excavator": {
-        "writer": "claude_sonnet",       # Sonnet - 의도 파악
-        "auditor": "gpt_5_mini",         # GPT-5 mini - 확인
-        "description": "CEO 의도 발굴 + 확인"
+        "writer": "gpt_thinking",          # GPT-5.2 Thinking Extended - requirements_interrogator (뇌)
+        "auditor": "claude_cli",           # CLI Sonnet 4 - ambiguity_sniffer_reviewer
+        "stamp": "claude_cli",             # CLI Sonnet 4 - strict_verdict_clerk
+        "description": "CEO 의도 발굴 (뇌) + 검증 + 도장",
+        "auditor_profile": "reviewer",     # Sonnet 4
+        "stamp_profile": "reviewer",       # Sonnet 4
     },
 }
 
-# VIP 프리픽스용 듀얼 엔진 (VIP Writer + VIP Auditor)
+# VIP 프리픽스용 듀얼 엔진 (VIP Writer + VIP Auditor + Stamp)
+# v2.4.3: GPT-5 mini 제거, 전부 Sonnet 4로 통일
 VIP_DUAL_ENGINE = {
-    "최고/": {  # Opus 4.5 기반
-        "writer": "claude_opus",         # Opus 4.5 - VIP Writer
-        "auditor": "claude_sonnet",      # Sonnet 4 - VIP Auditor
-        "description": "VIP-AUDIT: Opus + Sonnet 크로스체크"
+    "최고/": {  # VIP-AUDIT 기반 (Claude CLI)
+        "writer": "claude_cli",           # CLI Opus - VIP Writer
+        "auditor": "claude_cli",          # CLI Sonnet 4 - VIP Auditor
+        "stamp": "claude_cli",            # CLI Sonnet 4 - strict_verdict_clerk
+        "description": "VIP-AUDIT: Opus + Sonnet 크로스체크",
+        "writer_profile": "coder",        # Opus
+        "auditor_profile": "reviewer",    # Sonnet 4
+        "stamp_profile": "reviewer",      # Sonnet 4
     },
     "생각/": {  # GPT-5.2 Thinking 기반
-        "writer": "gpt_thinking",        # GPT-5.2 Thinking Extended
-        "auditor": "claude_opus",        # Opus 4.5 - 크로스체크
-        "description": "VIP-THINKING: GPT-5.2 + Opus 크로스체크"
+        "writer": "gpt_thinking",         # GPT-5.2 Thinking Extended (뇌)
+        "auditor": "claude_cli",          # CLI Sonnet 4 - 크로스체크
+        "stamp": "claude_cli",            # CLI Sonnet 4 - strict_verdict_clerk
+        "description": "VIP-THINKING: GPT-5.2 (뇌) + Sonnet 크로스체크",
+        "auditor_profile": "reviewer",    # Sonnet 4
+        "stamp_profile": "reviewer",      # Sonnet 4
     },
     "검색/": {  # Perplexity 기반
-        "writer": "perplexity_sonar",    # Perplexity Sonar Pro
-        "auditor": "gpt_5_mini",         # GPT-5 mini - 팩트체크
-        "description": "RESEARCH: Perplexity + 팩트체크"
+        "writer": "perplexity_sonar",     # Perplexity Sonar Pro - 검색
+        "auditor": "claude_cli",          # CLI Sonnet 4 - 팩트체크 (GPT-5 mini 제거)
+        "stamp": "claude_cli",            # CLI Sonnet 4 - strict_verdict_clerk
+        "description": "RESEARCH: Perplexity + Sonnet 팩트체크",
+        "auditor_profile": "reviewer",    # Sonnet 4
+        "stamp_profile": "reviewer",      # Sonnet 4
     },
 }
 
-# 위원회별 모델 할당 (저렴한 모델 위주, 타이브레이커만 비싼 모델)
+# 위원회별 모델 할당 - CLI 기반 (Claude Code CLI 사용)
+# v2.4: PM 전용 단일 위원회 - 7개 페르소나 전원 참여
 COUNCIL_MODEL_MAPPING = {
-    "code": {
+    "pm": {
         "personas": {
-            "skeptic": "gpt_5_mini",
-            "perfectionist": "claude_haiku",    # Haiku 없으면 4o-mini로 대체
-            "pragmatist": "gpt_5_mini",
+            "skeptic": "cli",           # 🤨 회의론자 - 근거 요구
+            "perfectionist": "cli",     # 🔬 완벽주의자 - 디테일 집착
+            "pragmatist": "cli",        # 🎯 현실주의자 - 실행 중심
+            "pessimist": "cli",         # 😰 비관론자 - 최악 가정
+            "optimist": "cli",          # 😊 낙관론자 - 가능성 발견
+            "devils_advocate": "cli",   # 😈 악마의 변호인 - 반대 의견
+            "security_hawk": "cli",     # 🦅 보안 감시자 - 취약점 탐지
         },
-        "tiebreaker": "claude_sonnet",           # 의견 갈릴 때 Sonnet
-    },
-    "strategy": {
-        "personas": {
-            "pessimist": "gpt_5_mini",
-            "optimist": "claude_haiku",
-            "devils_advocate": "gpt_5_mini",
-        },
-        "tiebreaker": "gpt_thinking",            # 전략은 GPT-5.2 Thinking
-    },
-    "security": {
-        "personas": {
-            "security_hawk": "claude_sonnet",    # 보안은 Sonnet 필수
-            "skeptic": "gpt_5_mini",
-            "pessimist": "gpt_5_mini",
-        },
-        "tiebreaker": "claude_opus",             # 보안 최종은 Opus
-    },
-    "deploy": {
-        "personas": {
-            "security_hawk": "claude_sonnet",
-            "pessimist": "gpt_5_mini",
-            "pragmatist": "gpt_5_mini",
-            "perfectionist": "claude_haiku",
-        },
-        "tiebreaker": "claude_opus",             # 배포 최종은 CEO(Opus)
-        "requires_ceo": True,
-    },
-    "mvp": {
-        "personas": {
-            "pragmatist": "gpt_5_mini",
-            "optimist": "gpt_5_mini",
-            "skeptic": "claude_haiku",
-        },
-        "tiebreaker": "claude_sonnet",
+        "tiebreaker": "cli",
+        "use_cli": True,
     },
 }
 
@@ -183,26 +188,48 @@ def call_anthropic(model_config: ModelConfig, messages: list, system_prompt: str
 
 
 def call_openai(model_config: ModelConfig, messages: list, system_prompt: str) -> str:
-    """OpenAI API 호출"""
+    """
+    OpenAI API 호출
+
+    GPT-5.2 Extended Thinking 지원:
+    - reasoning_effort: "high" or "xhigh" → 실제 reasoning 토큰 사용
+    - reasoning_effort가 none이 아니면 temperature/top_p 사용 불가
+    """
     try:
         import openai
         client = openai.OpenAI(api_key=os.getenv(model_config.api_key_env))
 
+        # 프롬프트 주입 (thinking_mode일 때 추가 지침)
         if getattr(model_config, 'thinking_mode', False):
             system_prompt = THINKING_EXTEND_PREFIX + system_prompt
 
         full_messages = [{"role": "system", "content": system_prompt}]
         full_messages.extend(messages)
 
-        # GPT-5 계열: temperature 지원 안함, max_completion_tokens 사용
+        # GPT-5.2 계열: reasoning_effort 지원 + temperature 충돌 방지
         if model_config.model_id.startswith("gpt-5"):
-            response = client.chat.completions.create(
-                model=model_config.model_id,
-                max_completion_tokens=model_config.max_tokens,
-                # GPT-5는 temperature=1만 지원 (파라미터 생략)
-                messages=full_messages
-            )
+            # reasoning_effort 가져오기 (AGENT_CONFIG에서 설정)
+            reasoning_effort = getattr(model_config, 'reasoning_effort', None)
+
+            # reasoning_effort가 설정되어 있으면 (high/xhigh)
+            # → temperature/top_p 사용 불가 (OpenAI 제약)
+            if reasoning_effort and reasoning_effort != "none":
+                print(f"[OpenAI] GPT-5.2 Thinking Extended: reasoning_effort={reasoning_effort}")
+                response = client.chat.completions.create(
+                    model=model_config.model_id,
+                    max_completion_tokens=model_config.max_tokens,
+                    reasoning_effort=reasoning_effort,  # ← 실제 Extended Thinking 활성화
+                    messages=full_messages
+                )
+            else:
+                # reasoning_effort 없으면 기본 호출 (temperature 사용 안 함)
+                response = client.chat.completions.create(
+                    model=model_config.model_id,
+                    max_completion_tokens=model_config.max_tokens,
+                    messages=full_messages
+                )
         else:
+            # GPT-4 이하: 기존 방식
             response = client.chat.completions.create(
                 model=model_config.model_id,
                 max_tokens=model_config.max_tokens,
@@ -320,6 +347,279 @@ def call_dual_engine(role: str, messages: list, system_prompt: str) -> str:
 # 듀얼 엔진 V2 (Writer + Auditor 패턴)
 # =============================================================================
 
+# Auditor JSON 스키마 (출력 강제용)
+AUDITOR_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "verdict": {"type": "string", "enum": ["APPROVE", "REVISE", "REJECT"]},
+        "must_fix": {"type": "array", "items": {"type": "string"}},
+        "nice_to_fix": {"type": "array", "items": {"type": "string"}},
+        "rewrite_instructions": {"type": "string"},
+        "requires_council": {"type": "boolean"},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 100}
+    },
+    "required": ["verdict", "must_fix", "confidence"]
+}
+
+
+def _extract_json_from_text(text: str) -> dict:
+    """
+    텍스트에서 JSON 객체 추출 (v2.3.3)
+
+    마크다운 코드블록, 순수 JSON 모두 지원
+    """
+    import json
+    import re
+
+    # 1차: ```json ... ``` 블록 찾기
+    json_block = re.search(r'```(?:json)?\s*\n?({[\s\S]*?})\s*\n?```', text)
+    if json_block:
+        try:
+            return json.loads(json_block.group(1))
+        except json.JSONDecodeError:
+            pass
+
+    # 2차: 순수 JSON 객체 찾기 (첫 '{' ~ 마지막 '}')
+    start = text.find('{')
+    end = text.rfind('}')
+    if start != -1 and end != -1 and end > start:
+        try:
+            return json.loads(text[start:end + 1])
+        except json.JSONDecodeError:
+            pass
+
+    # 3차: 실패 시 기본값 반환
+    return {
+        "verdict": "REVISE",
+        "must_fix": ["JSON 파싱 실패 - 원본 텍스트 확인 필요"],
+        "nice_to_fix": [],
+        "rewrite_instructions": text[:500],
+        "requires_council": False,
+        "confidence": 0
+    }
+
+
+def dual_engine_write_audit_rewrite(
+    role: str,
+    messages: list,
+    system_prompt: str,
+    max_rewrite: int = 3
+) -> Tuple[str, Dict[str, Any]]:
+    """
+    듀얼 엔진 V3: Write → Audit → Rewrite 패턴 (v2.3.3)
+
+    기존 V2의 "붙여넣기" 방식 대신:
+    1. Writer가 초안 작성
+    2. Auditor가 JSON으로 verdict 반환
+    3. REVISE면 Writer가 피드백 반영하여 재작성 (최대 max_rewrite회)
+    4. APPROVE면 초안 그대로 반환
+    5. REJECT면 Council 소집 트리거
+
+    Returns:
+        (최종 응답, 메타데이터)
+    """
+    if role not in DUAL_ENGINE_ROLES:
+        from src.services.cli_supervisor import CLISupervisor
+        cli = CLISupervisor()
+        result = cli.call_cli(messages[-1]["content"], system_prompt, "coder")
+        return (result.output if result.success else f"[Error] {result.error}"), {"dual": False}
+
+    config = DUAL_ENGINE_ROLES[role]
+    writer_key = config["writer"]
+    auditor_key = config["auditor"]
+    writer_profile = config.get("writer_profile", "coder")
+    auditor_profile = config.get("auditor_profile", "reviewer")
+
+    rewrite_count = 0
+    audit_history = []
+
+    # 1단계: Writer 초안 작성
+    print(f"[Dual-V3] {role} Writer ({writer_key}) 초안 작성 중...")
+    draft, writer_name = _call_model_or_cli(writer_key, messages, system_prompt, writer_profile)
+
+    if "[Error]" in draft or "[CLI Error]" in draft:
+        return draft, {"dual": True, "error": "writer_failed", "version": "v3"}
+
+    while rewrite_count < max_rewrite:
+        # 2단계: Auditor 리뷰 (JSON 출력 강제) - v2.4.2 강화된 프롬프트
+        auditor_prompt = f"""당신은 {role} 작업의 Auditor(감사관)입니다.
+
+## 절대 규칙 (위반 시 즉시 무효)
+1. **수정 금지**: "내가 고쳐줄게요" 절대 금지. 오직 판정만.
+2. **인용 필수**: 모든 지적은 파일경로/함수명/라인/에러 재현 커맨드로 증거 제시.
+   - "느낌상 별로" 같은 감상문 = 즉시 REJECT 처리됨
+3. **Lazy Approval**: must_fix는 Severity HIGH만 허용:
+   - 보안 취약점 (인증/권한 우회, injection)
+   - 데이터 손상/유실 가능성
+   - 크래시/무한루프
+   - 핵심 경로 테스트 부재
+   - 명백한 요구사항 불일치
+4. **스타일/취향/변수명** = nice_to_fix로만 (반려 사유 불가)
+
+=== WRITER 결과물 ===
+{draft}
+======================
+
+**반드시 아래 JSON 형식으로만 응답하세요 (코드블록 없이 순수 JSON):**
+
+{{
+  "verdict": "APPROVE | REVISE | REJECT",
+  "must_fix": [
+    {{
+      "severity": "HIGH",
+      "issue": "문제 설명",
+      "evidence": "파일:라인 또는 재현 커맨드",
+      "fix_hint": "수정 방향 (코드 아님)"
+    }}
+  ],
+  "nice_to_fix": ["권장사항 (반려 사유 아님)"],
+  "tests_to_add": ["추가할 테스트 케이스명"],
+  "evidence": ["검증에 사용한 파일/함수/라인 목록"],
+  "risk_level": "LOW | MEDIUM | HIGH | CRITICAL",
+  "requires_council": false,
+  "confidence": 85,
+  "rewrite_instructions": "REVISE일 때만: Writer에게 전달할 구체적 지시"
+}}
+
+## Verdict 기준
+- **APPROVE**: must_fix 없음, 요구사항 충족
+- **REVISE**: must_fix 1개 이상 (HIGH severity만)
+- **REJECT**: 근본적 설계 결함 또는 요구사항 완전 불일치 → Council 필수
+"""
+
+        auditor_messages = messages.copy()
+        auditor_messages.append({"role": "assistant", "content": draft})
+        auditor_messages.append({"role": "user", "content": auditor_prompt})
+
+        print(f"[Dual-V3] {role} Auditor ({auditor_key}) 리뷰 중...")
+        auditor_response, auditor_name = _call_model_or_cli(
+            auditor_key, auditor_messages, system_prompt, auditor_profile
+        )
+
+        # JSON 파싱
+        audit = _extract_json_from_text(auditor_response)
+        audit_history.append(audit)
+
+        verdict = audit.get("verdict", "REVISE")
+        print(f"[Dual-V3] Auditor verdict: {verdict} (confidence: {audit.get('confidence', 'N/A')})")
+
+        # APPROVE: 초안 그대로 반환
+        if verdict == "APPROVE":
+            meta = {
+                "dual": True,
+                "version": "v3",
+                "writer_model": writer_name,
+                "auditor_model": auditor_name,
+                "role": role,
+                "verdict": "APPROVE",
+                "rewrite_count": rewrite_count,
+                "audit_history": audit_history,
+                "requires_council": audit.get("requires_council", False),
+            }
+            return draft, meta
+
+        # REJECT: Council 트리거와 함께 반환
+        if verdict == "REJECT":
+            meta = {
+                "dual": True,
+                "version": "v3",
+                "writer_model": writer_name,
+                "auditor_model": auditor_name,
+                "role": role,
+                "verdict": "REJECT",
+                "rewrite_count": rewrite_count,
+                "audit_history": audit_history,
+                "requires_council": True,  # REJECT면 무조건 Council
+                "rejection_reason": audit.get("must_fix", []),
+            }
+            # REJECT 시에도 draft 반환 (Council에서 검토용)
+            return f"""⚠️ **AUDITOR REJECT**
+
+{draft}
+
+---
+**Rejection Reasons:**
+{chr(10).join(f'- {item}' for item in audit.get('must_fix', []))}
+""", meta
+
+        # REVISE: Writer에게 피드백 전달하여 재작성
+        rewrite_count += 1
+        print(f"[Dual-V3] Rewrite #{rewrite_count}...")
+
+        rewrite_prompt = f"""이전 초안에 대해 Auditor가 다음 수정을 요청했습니다:
+
+**반드시 수정할 항목:**
+{chr(10).join(f'- {item}' for item in audit.get('must_fix', []))}
+
+**Auditor 지시사항:**
+{audit.get('rewrite_instructions', '위 항목들을 수정해주세요.')}
+
+---
+
+**이전 초안:**
+{draft}
+
+---
+
+위 피드백을 반영하여 수정된 버전을 작성해주세요.
+"""
+
+        rewrite_messages = messages.copy()
+        rewrite_messages.append({"role": "user", "content": rewrite_prompt})
+
+        draft, writer_name = _call_model_or_cli(writer_key, rewrite_messages, system_prompt, writer_profile)
+
+        if "[Error]" in draft or "[CLI Error]" in draft:
+            return draft, {"dual": True, "error": "rewrite_failed", "version": "v3"}
+
+    # max_rewrite 소진 시 마지막 draft 반환
+    meta = {
+        "dual": True,
+        "version": "v3",
+        "writer_model": writer_name,
+        "auditor_model": auditor_name,
+        "role": role,
+        "verdict": "MAX_REWRITE_EXHAUSTED",
+        "rewrite_count": rewrite_count,
+        "audit_history": audit_history,
+        "requires_council": True,  # max_rewrite 소진 시 Council 권장
+    }
+    return draft, meta
+
+
+def _call_model_or_cli(model_key: str, messages: list, system_prompt: str, profile: str = "coder") -> Tuple[str, str]:
+    """
+    모델 또는 CLI 호출 헬퍼 함수
+
+    Args:
+        model_key: 모델 키 ("claude_cli" 또는 MODELS 키)
+        messages: 메시지 리스트
+        system_prompt: 시스템 프롬프트
+        profile: CLI 프로필 (coder/qa/reviewer)
+
+    Returns:
+        (응답, 모델명)
+    """
+    if model_key == "claude_cli":
+        from src.services.cli_supervisor import CLISupervisor
+        cli = CLISupervisor()
+        # 메시지에서 마지막 user 메시지 추출
+        user_message = messages[-1]["content"] if messages else ""
+        result = cli.call_cli(
+            prompt=user_message,
+            system_prompt=system_prompt,
+            profile=profile,
+            task_context=f"Dual Engine: {profile}"
+        )
+        if result.success:
+            return result.output, f"Claude CLI ({profile})"
+        else:
+            return f"[CLI Error] {result.error or result.abort_reason}", f"Claude CLI ({profile})"
+    else:
+        model = MODELS.get(model_key, MODELS.get("gpt_5_mini"))
+        return call_llm(model, messages, system_prompt), model.name
+
+
 def call_dual_engine_v2(
     role: str,
     messages: list,
@@ -327,72 +627,76 @@ def call_dual_engine_v2(
 ) -> Tuple[str, Dict[str, Any]]:
     """
     듀얼 엔진 V2: Writer + Auditor 패턴
+    v2.4: Claude CLI 지원 추가
 
-    1단계: Writer가 초안 작성
-    2단계: Auditor가 리뷰 및 수정 제안
+    1단계: Writer가 초안 작성 (API 또는 CLI)
+    2단계: Auditor가 리뷰 및 수정 제안 (API 또는 CLI)
     3단계: 의견 불일치시 병합 또는 위원회 소집
 
     Returns:
         (최종 응답, 메타데이터)
     """
     if role not in DUAL_ENGINE_ROLES:
-        # 듀얼 엔진 역할이 아니면 단일 엔진으로 폴백
-        return call_llm(MODELS.get("claude_sonnet", MODELS["claude_opus"]), messages, system_prompt), {"dual": False}
+        # 듀얼 엔진 역할이 아니면 CLI로 폴백
+        from src.services.cli_supervisor import CLISupervisor
+        cli = CLISupervisor()
+        result = cli.call_cli(messages[-1]["content"], system_prompt, "coder")
+        return (result.output if result.success else f"[Error] {result.error}"), {"dual": False}
 
     config = DUAL_ENGINE_ROLES[role]
-    writer_model = MODELS.get(config["writer"], MODELS["claude_sonnet"])
-    auditor_model = MODELS.get(config["auditor"], MODELS["gpt_5_mini"])
+    writer_key = config["writer"]
+    auditor_key = config["auditor"]
+    writer_profile = config.get("writer_profile", "coder")
+    auditor_profile = config.get("auditor_profile", "reviewer")
 
     # 1단계: Writer 초안 작성
-    print(f"[Dual-V2] {role} Writer ({writer_model.name}) 작업 중...")
-    writer_response = call_llm(writer_model, messages, system_prompt)
+    print(f"[Dual-V2] {role} Writer ({writer_key}) 작업 중...")
+    writer_response, writer_name = _call_model_or_cli(writer_key, messages, system_prompt, writer_profile)
 
-    if "[Error]" in writer_response:
+    if "[Error]" in writer_response or "[CLI Error]" in writer_response:
         return writer_response, {"dual": True, "error": "writer_failed"}
 
-    # 2단계: Auditor 리뷰
+    # 2단계: Auditor 리뷰 - v2.4.2 강화된 프롬프트
     auditor_prompt = f"""당신은 {role} 작업의 Auditor(감사관)입니다.
 
-Writer가 작성한 다음 결과물을 검토하세요:
+## 절대 규칙 (위반 시 즉시 무효)
+1. **수정 금지**: "내가 고쳐줄게요" 절대 금지. 오직 판정만.
+2. **인용 필수**: 모든 지적은 파일경로/함수명/라인/에러 재현 커맨드로 증거 제시.
+3. **Lazy Approval**: must_fix는 Severity HIGH만 허용:
+   - 보안 취약점, 데이터 손상, 크래시, 테스트 부재, 요구사항 불일치
+4. **스타일/취향** = nice_to_fix로만 (반려 사유 불가)
 
 === WRITER 결과물 ===
 {writer_response}
 ======================
 
-검토 기준:
-1. 논리적 오류/버그 확인
-2. 누락된 엣지케이스 확인
-3. 보안 취약점 확인
-4. 개선 제안
+**반드시 아래 JSON 형식으로만 응답 (코드블록 없이):**
 
-출력 형식:
-```yaml
-verdict: "approve/revise/reject"
-issues:
-  - severity: "critical/high/medium/low"
-    description: "문제 설명"
-    fix: "수정 제안"
-improvements:
-  - "개선 사항 1"
-  - "개선 사항 2"
-final_comment: "최종 코멘트"
-```
+{{
+  "verdict": "APPROVE | REVISE | REJECT",
+  "must_fix": [{{"severity": "HIGH", "issue": "문제", "evidence": "파일:라인", "fix_hint": "방향"}}],
+  "nice_to_fix": ["권장사항"],
+  "evidence": ["검증한 파일/함수 목록"],
+  "risk_level": "LOW | MEDIUM | HIGH | CRITICAL",
+  "requires_council": false,
+  "confidence": 85
+}}
 """
 
     auditor_messages = messages.copy()
     auditor_messages.append({"role": "assistant", "content": writer_response})
     auditor_messages.append({"role": "user", "content": auditor_prompt})
 
-    print(f"[Dual-V2] {role} Auditor ({auditor_model.name}) 리뷰 중...")
-    auditor_response = call_llm(auditor_model, auditor_messages, system_prompt)
+    print(f"[Dual-V2] {role} Auditor ({auditor_key}) 리뷰 중...")
+    auditor_response, auditor_name = _call_model_or_cli(auditor_key, auditor_messages, system_prompt, auditor_profile)
 
     # 결과 병합
-    merged_response = f"""## 📝 Writer ({writer_model.name})
+    merged_response = f"""## 📝 Writer ({writer_name})
 {writer_response}
 
 ---
 
-## 🔍 Auditor ({auditor_model.name})
+## 🔍 Auditor ({auditor_name})
 {auditor_response}
 
 ---
@@ -402,8 +706,8 @@ final_comment: "최종 코멘트"
     # 메타데이터
     meta = {
         "dual": True,
-        "writer_model": writer_model.name,
-        "auditor_model": auditor_model.name,
+        "writer_model": writer_name,
+        "auditor_model": auditor_name,
         "role": role,
         "description": config["description"],
     }
@@ -422,84 +726,80 @@ def call_vip_dual_engine(
 ) -> Tuple[str, Dict[str, Any]]:
     """
     VIP 듀얼 엔진: CEO 프리픽스 기반 VIP Writer + Auditor 패턴
+    v2.4: Claude CLI 지원 추가
 
-    - 최고/ : Opus + Sonnet 크로스체크
-    - 생각/ : GPT-5.2 Thinking + Opus 크로스체크
-    - 검색/ : Perplexity + 4o-mini 팩트체크
+    - 최고/ : Claude CLI 듀얼 크로스체크
+    - 생각/ : GPT-5.2 Thinking + Claude CLI 크로스체크
+    - 검색/ : Perplexity + GPT-5 mini 팩트체크
 
     Returns:
         (최종 응답, 메타데이터)
     """
     if prefix not in VIP_DUAL_ENGINE:
-        # VIP 프리픽스가 아니면 기본 모델로 폴백
-        return call_llm(MODELS.get("claude_opus", list(MODELS.values())[0]), messages, system_prompt), {"dual": False, "vip": False}
+        # VIP 프리픽스가 아니면 CLI로 폴백
+        from src.services.cli_supervisor import CLISupervisor
+        cli = CLISupervisor()
+        result = cli.call_cli(messages[-1]["content"], system_prompt, "reviewer")
+        return (result.output if result.success else f"[Error] {result.error}"), {"dual": False, "vip": False}
 
     config = VIP_DUAL_ENGINE[prefix]
-    writer_model = MODELS.get(config["writer"])
-    auditor_model = MODELS.get(config["auditor"])
-
-    if not writer_model:
-        print(f"[VIP-Dual] Writer 모델 {config['writer']} 없음, 폴백")
-        writer_model = MODELS.get("claude_opus", list(MODELS.values())[0])
-
-    if not auditor_model:
-        print(f"[VIP-Dual] Auditor 모델 {config['auditor']} 없음, 폴백")
-        auditor_model = MODELS.get("claude_sonnet", MODELS.get("gpt_5_mini"))
+    writer_key = config["writer"]
+    auditor_key = config["auditor"]
+    writer_profile = config.get("writer_profile", "reviewer")
+    auditor_profile = config.get("auditor_profile", "reviewer")
 
     # 1단계: VIP Writer 작업
-    print(f"[VIP-Dual] VIP Writer ({writer_model.name}) 작업 중...")
-    writer_response = call_llm(writer_model, messages, system_prompt)
+    print(f"[VIP-Dual] VIP Writer ({writer_key}) 작업 중...")
+    writer_response, writer_name = _call_model_or_cli(writer_key, messages, system_prompt, writer_profile)
 
-    if "[Error]" in writer_response:
+    if "[Error]" in writer_response or "[CLI Error]" in writer_response:
         return writer_response, {"dual": True, "vip": True, "error": "writer_failed"}
 
-    # 2단계: VIP Auditor 크로스체크
+    # 2단계: VIP Auditor 크로스체크 - v2.4.2 강화된 프롬프트
     auditor_prompt = f"""당신은 VIP 레벨의 Auditor(감사관)입니다.
 
-다른 VIP 모델이 작성한 다음 결과물을 크로스체크하세요:
+## 절대 규칙 (위반 시 즉시 무효)
+1. **수정 금지**: "내가 고쳐줄게요" 절대 금지. 오직 판정만.
+2. **인용 필수**: 모든 지적은 구체적 증거(파일/라인/데이터/로직)로 뒷받침.
+3. **Lazy Approval**: must_fix는 Severity HIGH만 허용:
+   - CEO 의사결정에 치명적 영향
+   - 논리적 오류/데이터 왜곡
+   - 리스크 누락 (보안/비용/규정)
+4. **스타일/표현 방식** = nice_to_fix로만 (반려 사유 불가)
 
 === VIP WRITER 결과물 ===
 {writer_response}
 =========================
 
-VIP 레벨 검토 기준:
-1. 논리적 완결성 및 정확도
-2. 누락된 관점/엣지케이스
-3. CEO 의사결정에 미치는 영향
-4. 리스크 요소 확인
-5. 개선/보완 제안
+**반드시 아래 JSON 형식으로만 응답 (코드블록 없이):**
 
-출력 형식:
-```yaml
-verdict: "approve/revise/escalate"
-confidence: 0-100
-key_findings:
-  - "핵심 발견 1"
-  - "핵심 발견 2"
-concerns:
-  - severity: "critical/high/medium/low"
-    description: "우려 사항"
-recommendations:
-  - "권장 사항 1"
-  - "권장 사항 2"
-final_assessment: "최종 평가 (2-3문장)"
-```
+{{
+  "verdict": "APPROVE | REVISE | REJECT",
+  "must_fix": [{{"severity": "HIGH", "issue": "문제", "evidence": "구체적 근거", "fix_hint": "방향"}}],
+  "nice_to_fix": ["권장사항 (반려 사유 아님)"],
+  "key_findings": ["핵심 발견 1", "핵심 발견 2"],
+  "evidence": ["검증에 사용한 근거 목록"],
+  "risk_level": "LOW | MEDIUM | HIGH | CRITICAL",
+  "requires_council": false,
+  "confidence": 85,
+  "final_assessment": "CEO 의사결정 관점 최종 평가 (2문장)"
+}}
 """
 
     auditor_messages = messages.copy()
     auditor_messages.append({"role": "assistant", "content": writer_response})
     auditor_messages.append({"role": "user", "content": auditor_prompt})
 
-    print(f"[VIP-Dual] VIP Auditor ({auditor_model.name}) 크로스체크 중...")
-    auditor_response = call_llm(auditor_model, auditor_messages, system_prompt)
+    print(f"[VIP-Dual] VIP Auditor ({auditor_key}) 크로스체크 중...")
+    auditor_response, auditor_name = _call_model_or_cli(auditor_key, auditor_messages, system_prompt, auditor_profile)
 
     # 결과 병합
-    merged_response = f"""## 📝 VIP Writer ({writer_model.name})
+    merged_response = f"""## 📝 VIP Writer ({writer_name})
 {writer_response}
 
 ---
 
-## 🔍 VIP Auditor ({auditor_model.name})
+## 🔍 VIP Auditor ({auditor_name})
 {auditor_response}
 
 ---
@@ -511,8 +811,8 @@ final_assessment: "최종 평가 (2-3문장)"
         "dual": True,
         "vip": True,
         "prefix": prefix,
-        "writer_model": writer_model.name,
-        "auditor_model": auditor_model.name,
+        "writer_model": writer_name,
+        "auditor_model": auditor_name,
         "description": config["description"],
     }
 
@@ -535,131 +835,205 @@ async def call_council_llm(
     council_type: str = None
 ) -> str:
     """
-    위원회 페르소나용 LLM 호출
+    위원회 페르소나용 CLI 호출 (v2.3.2: API → CLI 전환)
 
-    COUNCIL_MODEL_MAPPING에 따라 적절한 모델 선택
+    모든 위원회 멤버가 Claude Code CLI를 사용
     """
-    # 모델 선택 로직
-    model_key = "gpt_5_mini"  # 기본값
+    from src.services.cli_supervisor import CLISupervisor
 
-    if council_type and persona_id:
-        mapping = COUNCIL_MODEL_MAPPING.get(council_type, {})
-        personas = mapping.get("personas", {})
-        model_key = personas.get(persona_id, "gpt_5_mini")
+    print(f"[Council-CLI] {persona_id} → Claude Code CLI")
 
-    model_config = MODELS.get(model_key)
-    if not model_config:
-        model_config = MODELS["gpt_5_mini"] if "gpt_5_mini" in MODELS else list(MODELS.values())[0]
+    cli_supervisor = CLISupervisor()
 
-    # temperature 오버라이드
-    original_temp = model_config.temperature
-    model_config.temperature = temperature
+    # CLI 호출 (reviewer 프로필 - 읽기 전용)
+    result = cli_supervisor.call_cli(
+        prompt=user_message,
+        system_prompt=system_prompt,
+        profile="reviewer",
+        task_context=f"Council: {council_type}, Persona: {persona_id}"
+    )
 
-    messages = [{"role": "user", "content": user_message}]
-    response = call_llm(model_config, messages, system_prompt)
-
-    # temperature 복원
-    model_config.temperature = original_temp
-
-    return response
+    if result.success:
+        return result.output
+    else:
+        error_msg = result.error or result.abort_reason or "CLI 호출 실패"
+        print(f"[Council-CLI] Error: {error_msg}")
+        return f"[CLI ERROR] {error_msg}"
 
 
 def init_council_with_llm():
-    """위원회에 LLM Caller 주입"""
+    """위원회에 CLI Caller 주입 (v2.3.2: API → CLI 전환)"""
     from src.infra.council import get_council
+    from src.services.cli_supervisor import CLISupervisor
 
     council = get_council()
+    cli_supervisor = CLISupervisor()
 
-    async def council_llm_caller(
+    async def council_cli_caller(
         system_prompt: str,
         user_message: str,
         temperature: float,
         persona_id: str = None,
         council_type: str = None
     ) -> str:
-        """위원회 LLM 호출 (모델 매핑 지원)"""
-        # 모델 선택 로직
-        model_key = "gpt_5_mini"  # 기본값
+        """위원회 CLI 호출 (Claude Code CLI 사용)"""
+        print(f"[Council-CLI] {persona_id} → Claude Code CLI")
 
-        if council_type and persona_id:
-            mapping = COUNCIL_MODEL_MAPPING.get(council_type, {})
-            personas = mapping.get("personas", {})
-            model_key = personas.get(persona_id, "gpt_5_mini")
+        # 동기 CLI 호출을 비동기로 래핑
+        def sync_cli_call():
+            # CLI 프로필 결정 (위원회는 reviewer 프로필 사용 - 읽기 전용)
+            profile = "reviewer"
 
-        model_config = MODELS.get(model_key)
-        if not model_config:
-            model_config = MODELS.get("gpt_5_mini", list(MODELS.values())[0])
+            # CLI 호출
+            result = cli_supervisor.call_cli(
+                prompt=user_message,
+                system_prompt=system_prompt,
+                profile=profile,
+                task_context=f"Council: {council_type}, Persona: {persona_id}"
+            )
 
-        print(f"[Council] {persona_id} → {model_config.name}")
+            if result.success:
+                return result.output
+            else:
+                # CLI 실패 시 에러 메시지 반환
+                error_msg = result.error or result.abort_reason or "CLI 호출 실패"
+                print(f"[Council-CLI] Error: {error_msg}")
+                return f"[CLI ERROR] {error_msg}"
 
-        # 동기 호출을 비동기로 래핑
-        def sync_call():
-            # temperature 오버라이드
-            original_temp = model_config.temperature
-            model_config.temperature = temperature
+        return await asyncio.get_event_loop().run_in_executor(None, sync_cli_call)
 
-            messages = [{"role": "user", "content": user_message}]
-            response = call_llm(model_config, messages, system_prompt)
-
-            # temperature 복원
-            model_config.temperature = original_temp
-            return response
-
-        return await asyncio.get_event_loop().run_in_executor(None, sync_call)
-
-    council.set_llm_caller(council_llm_caller)
-    print("[Council] LLM Caller 주입 완료 (모델 매핑 활성화)")
+    council.set_llm_caller(council_cli_caller)
+    print("[Council] CLI Caller 주입 완료 (Claude Code CLI 사용)")
     return council
 
 
-def should_convene_council(agent_role: str, response: str, context: Dict = None) -> Optional[str]:
+def should_convene_council(
+    agent_role: str,
+    response: str,
+    context: Dict = None,
+    dual_meta: Dict = None
+) -> Optional[str]:
     """
-    위원회 자동 소집 조건 판단
+    위원회 자동 소집 조건 판단 (v2.3.3 - JSON 기반)
+
+    PM만 위원회 소집 가능. 다른 에이전트는 위원회 불필요.
+
+    v2.3.3 변경:
+    - 문자열 탐지 대신 dual_meta의 requires_council 필드 우선 사용
+    - 문자열 탐지는 폴백으로만 사용
+
+    Args:
+        agent_role: 에이전트 역할
+        response: 에이전트 응답
+        context: 추가 컨텍스트
+        dual_meta: 듀얼 엔진 메타데이터 (requires_council 필드 포함)
 
     Returns:
-        위원회 유형 또는 None
+        "pm" 또는 None
     """
+    # PM만 위원회 소집 가능
+    if agent_role != "pm":
+        return None
+
     context = context or {}
+    dual_meta = dual_meta or {}
 
-    # 1. 전략 변경 감지
-    strategy_keywords = ["전략", "strategy", "방향", "decision", "결정", "plan"]
-    if agent_role == "strategist" or any(kw in response.lower() for kw in strategy_keywords):
-        if len(response) > 500:  # 긴 전략 응답
-            return "strategy"
+    # =========================================================================
+    # 1순위: dual_meta의 requires_council 필드 (JSON 기반)
+    # =========================================================================
+    if dual_meta.get("requires_council") is True:
+        print(f"[Council] JSON 기반 트리거: requires_council=True (verdict: {dual_meta.get('verdict', 'N/A')})")
+        return "pm"
 
-    # 2. 코드 패치 감지
-    code_keywords = ["```python", "```javascript", "```typescript", "def ", "class ", "function "]
-    if agent_role == "coder" or any(kw in response for kw in code_keywords):
-        if "def " in response or "class " in response:
-            return "code"
+    # REJECT verdict면 무조건 Council
+    if dual_meta.get("verdict") == "REJECT":
+        print("[Council] JSON 기반 트리거: verdict=REJECT")
+        return "pm"
 
-    # 3. 보안 관련 감지
-    security_keywords = ["password", "api_key", "secret", "token", "auth", "보안", "취약점"]
-    if any(kw in response.lower() for kw in security_keywords):
-        return "security"
+    # MAX_REWRITE_EXHAUSTED면 Council 권장
+    if dual_meta.get("verdict") == "MAX_REWRITE_EXHAUSTED":
+        print("[Council] JSON 기반 트리거: MAX_REWRITE_EXHAUSTED")
+        return "pm"
 
-    # 4. 배포 관련 감지
-    deploy_keywords = ["deploy", "배포", "production", "release", "push"]
-    if any(kw in response.lower() for kw in deploy_keywords):
-        return "deploy"
+    # =========================================================================
+    # 2순위: audit_history에서 requires_council 체크
+    # =========================================================================
+    audit_history = dual_meta.get("audit_history", [])
+    for audit in audit_history:
+        if audit.get("requires_council") is True:
+            print(f"[Council] audit_history 트리거: requires_council=True")
+            return "pm"
 
-    # 5. 듀얼 엔진 의견 불일치 감지 (Auditor가 reject 판정)
-    if "verdict: reject" in response.lower() or "verdict: revise" in response.lower():
-        if agent_role == "coder":
-            return "code"
-        elif agent_role == "strategist":
-            return "strategy"
+    # =========================================================================
+    # 3순위: 문자열 탐지 (폴백 - 레거시 호환)
+    # =========================================================================
+    # 중요한 의사결정 감지 (전략/방향/결정)
+    decision_keywords = ["전략", "strategy", "방향", "decision", "결정", "plan", "아키텍처", "architecture"]
+    if any(kw in response.lower() for kw in decision_keywords):
+        if len(response) > 500:  # 긴 응답일 때만
+            print("[Council] 문자열 탐지 트리거: decision keywords")
+            return "pm"
+
+    # 리스크 관련 감지
+    risk_keywords = ["risk", "리스크", "위험", "주의", "경고", "warning", "critical"]
+    if any(kw in response.lower() for kw in risk_keywords):
+        # 단순 언급이 아닌 실제 경고인지 확인 (문맥 체크)
+        risk_patterns = ["⚠️", "❌", "🚨", "REJECT", "HOLD", "critical issue"]
+        if any(p in response for p in risk_patterns):
+            print("[Council] 문자열 탐지 트리거: risk patterns")
+            return "pm"
 
     return None
+
+
+def _determine_trigger_source(dual_meta: Dict) -> str:
+    """
+    dual_meta에서 Council 트리거 소스 결정 (v2.3.3)
+
+    Returns:
+        트리거 소스 문자열
+    """
+    if not dual_meta:
+        return "manual"
+
+    verdict = dual_meta.get("verdict", "")
+
+    if verdict == "REJECT":
+        return "json_verdict_reject"
+    elif verdict == "MAX_REWRITE_EXHAUSTED":
+        return "json_verdict_max_rewrite"
+    elif dual_meta.get("requires_council") is True:
+        return "json_requires_council"
+
+    # audit_history에서 requires_council 확인
+    audit_history = dual_meta.get("audit_history", [])
+    for audit in audit_history:
+        if audit.get("requires_council") is True:
+            return "json_requires_council"
+
+    return "keyword_detection"
 
 
 async def convene_council_async(
     council_type: str,
     content: str,
-    context: str = ""
+    context: str = "",
+    trigger_source: str = "manual",
+    original_verdict_json: Dict = None
 ) -> Dict:
     """
-    비동기 위원회 소집
+    비동기 위원회 소집 (v2.3.3 - JSON 기반 트리거 지원)
+
+    Args:
+        council_type: 위원회 유형
+        content: 검토 대상 내용
+        context: 추가 컨텍스트
+        trigger_source: 트리거 소스
+            - "manual": 수동 소집
+            - "json_requires_council": JSON requires_council=True
+            - "json_verdict_reject": JSON verdict=REJECT
+            - "json_verdict_max_rewrite": MAX_REWRITE_EXHAUSTED
+        original_verdict_json: 트리거된 원본 JSON verdict
 
     Returns:
         판정 결과 딕셔너리
@@ -672,8 +1046,14 @@ async def convene_council_async(
     if council.llm_caller is None:
         init_council_with_llm()
 
-    print(f"[Council] {council_type.upper()} 위원회 소집 중...")
-    verdict = await council.convene(council_type, content, context)
+    print(f"[Council] {council_type.upper()} 위원회 소집 중... (trigger: {trigger_source})")
+    verdict = await council.convene(
+        council_type,
+        content,
+        context,
+        trigger_source=trigger_source,
+        original_verdict_json=original_verdict_json
+    )
 
     result = {
         "council_type": council_type,
@@ -682,6 +1062,7 @@ async def convene_council_async(
         "score_std": verdict.score_std,
         "requires_ceo": verdict.requires_ceo,
         "summary": verdict.summary,
+        "trigger_source": verdict.trigger_source,
         "judges": [
             {
                 "persona": j.persona_name,
@@ -697,9 +1078,17 @@ async def convene_council_async(
     return result
 
 
-def convene_council_sync(council_type: str, content: str, context: str = "") -> Dict:
+def convene_council_sync(
+    council_type: str,
+    content: str,
+    context: str = "",
+    trigger_source: str = "manual",
+    original_verdict_json: Dict = None
+) -> Dict:
     """동기 버전 위원회 소집"""
-    return asyncio.run(convene_council_async(council_type, content, context))
+    return asyncio.run(convene_council_async(
+        council_type, content, context, trigger_source, original_verdict_json
+    ))
 
 
 # =============================================================================
@@ -900,9 +1289,14 @@ def call_agent(
     return_meta: bool = False,
     use_dual_engine: bool = True,   # 듀얼 엔진 사용 여부
     auto_council: bool = True,      # 위원회 자동 소집 여부
+    _internal_call: bool = False,   # v2.3.3: PM 내부 호출 플래그 (하위 에이전트 호출용)
 ) -> str | tuple[str, dict]:
     """
     실제 LLM 호출 + [EXEC] 태그 자동 실행 + RAG 컨텍스트 주입 + 번역 + 스코어카드 로깅
+
+    v2.3.3 변경:
+    - CEO는 PM만 호출 가능. 하위 에이전트(coder/qa/strategist 등)는 PM이 호출.
+    - _internal_call=True면 PM이 하위 에이전트를 호출하는 것이므로 허용.
 
     CEO 프리픽스 지원:
     - 최고/ : VIP-AUDIT (Opus 4.5) 강제
@@ -911,11 +1305,36 @@ def call_agent(
 
     Args:
         return_meta: True이면 (response, meta_dict) 튜플 반환
+        _internal_call: True면 PM 내부 호출 (하위 에이전트 허용)
 
     Returns:
         str 또는 (str, dict): response 또는 (response, model_meta)
     """
     from src.core.session_state import get_current_session
+
+    # =========================================================================
+    # v2.3.3: CEO → PM만 허용. 하위 에이전트 직접 호출 차단.
+    # =========================================================================
+    ALLOWED_CEO_AGENTS = ["pm"]  # CEO가 직접 호출 가능한 에이전트
+    SUB_AGENTS = ["coder", "qa", "strategist", "analyst", "researcher", "excavator"]
+
+    if not _internal_call and agent_role in SUB_AGENTS:
+        print(f"[BLOCKED] CEO → {agent_role} 직접 호출 차단. PM을 통해 호출하세요.")
+        error_msg = f"""❌ **직접 호출 차단됨**
+
+CEO는 하위 에이전트(`{agent_role}`)를 직접 호출할 수 없습니다.
+
+**올바른 흐름:**
+1. CEO → PM에게 요청
+2. PM이 TaskSpec 생성 → 하위 에이전트에 위임
+
+**예시:**
+- ❌ "코더야 버그 수정해" (직접 호출)
+- ✅ "버그 수정해줘" (PM이 coder에게 위임)
+"""
+        if return_meta:
+            return error_msg, {"blocked": True, "reason": "direct_subagent_call"}
+        return error_msg
 
     current_session_id = get_current_session()
     start_time = time_module.time()
@@ -923,7 +1342,7 @@ def call_agent(
     # 디버그: 입력 메시지 확인
     import sys
     sys.stderr.write(f"[DEBUG-INPUT] message[:50]={message[:50] if len(message) > 50 else message}\n")
-    sys.stderr.write(f"[DEBUG-INPUT] message.startswith('최고/')={message.startswith('최고/')}\n")
+    sys.stderr.write(f"[DEBUG-INPUT] agent_role={agent_role}, _internal_call={_internal_call}\n")
     sys.stderr.flush()
 
     # [PROJECT: xxx] 태그에서 프로젝트 추출
@@ -1016,11 +1435,17 @@ def call_agent(
 
         # VIP 모드에서도 위원회 자동 소집 체크
         if auto_council:
-            council_type = should_convene_council(agent_role, response)
+            council_type = should_convene_council(agent_role, response, dual_meta=dual_meta)
             if council_type:
-                print(f"[Council] VIP 자동 소집 트리거: {council_type}")
+                # v2.3.3: trigger_source 결정
+                trigger_source = _determine_trigger_source(dual_meta)
+                print(f"[Council] VIP 자동 소집 트리거: {council_type} (source: {trigger_source})")
                 try:
-                    council_result = convene_council_sync(council_type, response, agent_message)
+                    council_result = convene_council_sync(
+                        council_type, response, agent_message,
+                        trigger_source=trigger_source,
+                        original_verdict_json=dual_meta.get("audit_history", [{}])[-1] if dual_meta.get("audit_history") else None
+                    )
                     model_meta['council'] = council_result
 
                     # 위원회 결과를 응답에 추가
@@ -1045,19 +1470,25 @@ def call_agent(
         stream.log(agent_role, "ceo", "response", response)
 
     # =========================================================================
-    # 일반 듀얼 엔진 V2 사용 (use_dual_engine=True이고 역할이 지원되는 경우)
+    # 듀얼 엔진 V3 사용 (Write → Audit → Rewrite 패턴)
     # =========================================================================
     elif use_dual_engine and agent_role in DUAL_ENGINE_ROLES and not used_prefix:
-        print(f"[Dual-V2] {agent_role} 듀얼 엔진 모드 활성화")
-        response, dual_meta = call_dual_engine_v2(agent_role, messages, system_prompt)
+        print(f"[Dual-V3] {agent_role} Write-Audit-Rewrite 패턴 활성화")
+        response, dual_meta = dual_engine_write_audit_rewrite(agent_role, messages, system_prompt)
 
-        # 위원회 자동 소집 체크
+        # 위원회 자동 소집 체크 (dual_meta 전달)
         if auto_council:
-            council_type = should_convene_council(agent_role, response)
+            council_type = should_convene_council(agent_role, response, dual_meta=dual_meta)
             if council_type:
-                print(f"[Council] 자동 소집 트리거: {council_type}")
+                # v2.3.3: trigger_source 결정
+                trigger_source = _determine_trigger_source(dual_meta)
+                print(f"[Council] 자동 소집 트리거: {council_type} (source: {trigger_source})")
                 try:
-                    council_result = convene_council_sync(council_type, response, agent_message)
+                    council_result = convene_council_sync(
+                        council_type, response, agent_message,
+                        trigger_source=trigger_source,
+                        original_verdict_json=dual_meta.get("audit_history", [{}])[-1] if dual_meta.get("audit_history") else None
+                    )
                     model_meta['council'] = council_result
 
                     # 위원회 결과를 응답에 추가
@@ -1114,6 +1545,7 @@ def call_agent(
 
     # =========================================================================
     # 레거시 모드 (use_router=False)
+    # v2.4: SINGLE_ENGINES에서 "claude_cli" 문자열 지원
     # =========================================================================
     else:
         if agent_role in DUAL_ENGINES:
@@ -1121,7 +1553,13 @@ def call_agent(
         else:
             model_config = SINGLE_ENGINES.get(agent_role)
             if model_config:
-                response = call_llm(model_config, messages, system_prompt)
+                # v2.4: claude_cli 문자열인 경우 CLI 호출
+                if model_config == "claude_cli":
+                    from config import CLI_PROFILES
+                    profile = CLI_PROFILES.get(agent_role, "reviewer")
+                    response, _ = _call_model_or_cli("claude_cli", messages, system_prompt, profile)
+                else:
+                    response = call_llm(model_config, messages, system_prompt)
                 stream = get_stream()
                 stream.log("ceo", agent_role, "request", agent_message)
                 stream.log(agent_role, "ceo", "response", response)
@@ -1262,7 +1700,8 @@ def process_call_tags(pm_response: str, use_loop_breaker: bool = True) -> list:
 
         print(f"[CALL] PM → {agent}: {message[:100]}...")
 
-        response = call_agent(message, agent, auto_execute=True, use_translation=False)
+        # PM이 서브에이전트 호출 시 _internal_call=True (CEO 직접 호출 차단 우회)
+        response = call_agent(message, agent, auto_execute=True, use_translation=False, _internal_call=True)
 
         # 응답 기반 루프 체크
         if use_loop_breaker:
