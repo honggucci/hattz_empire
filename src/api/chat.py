@@ -634,8 +634,8 @@ def chat_stream():
                     emit_progress(session_id, 'calling', agent_role, 40 + (idx * 10), sub_agent=sub_agent, total_agents=total_calls)
 
                     try:
-                        # 하위 에이전트 호출
-                        sub_response, sub_meta = call_agent(sub_message, sub_agent, auto_execute=True, use_translation=False, return_meta=True)
+                        # 하위 에이전트 호출 (PM이 [CALL:*] 태그로 호출 → _internal_call=True)
+                        sub_response, sub_meta = call_agent(sub_message, sub_agent, auto_execute=True, use_translation=False, return_meta=True, _internal_call=True)
 
                         # =====================================================
                         # [v2.3 Hook] Static Gate (0원 1차 게이트)
@@ -1240,7 +1240,8 @@ def _execute_chat_job(job_id: str):
                 job['status_message'] = f'{sub_agent.upper()} 호출 중 ({idx+1}/{len(call_infos)})'
 
                 try:
-                    sub_response, sub_meta = call_agent(sub_message, sub_agent, auto_execute=True, use_translation=False, return_meta=True)
+                    # 하위 에이전트 호출 (PM이 [CALL:*] 태그로 호출 → _internal_call=True)
+                    sub_response, sub_meta = call_agent(sub_message, sub_agent, auto_execute=True, use_translation=False, return_meta=True, _internal_call=True)
 
                     # Static Gate 검사
                     if session_rules:
