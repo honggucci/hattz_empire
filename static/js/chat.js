@@ -64,6 +64,13 @@ async function loadProjectFiles(projectId) {
     }
 }
 
+// =============================================================================
+// Jobs API 모드 vs SSE 모드 선택
+// =============================================================================
+let useJobsApi = true;  // true: Jobs API (브라우저 닫아도 계속), false: SSE (실시간 스트리밍)
+let currentJobId = null;  // 현재 진행 중인 Job ID
+let jobPollingInterval = null;  // Job 결과 폴링 인터벌
+
 // Send message
 async function sendMessage() {
     let message = messageInput.value.trim();
@@ -99,9 +106,181 @@ async function sendMessage() {
 
     // Add user message
     appendMessage('user', messageInput.value.trim(), agent);
+    const originalMessage = messageInput.value.trim();
     messageInput.value = '';
     messageInput.style.height = 'auto';
 
+    // Jobs API 모드 vs SSE 모드
+    if (useJobsApi) {
+        await sendMessageViaJobsApi(message, originalMessage, agent);
+    } else {
+        await sendMessageViaSSE(message, agent);
+    }
+}
+
+// =============================================================================
+// Jobs API 모드 - 브라우저 닫아도 백그라운드에서 계속 실행
+// =============================================================================
+async function sendMessageViaJobsApi(message, originalMessage, agent) {
+    // Show loading
+    const loadingId = showLoading();
+    setStatus('Submitting to queue...', true, 'thinking');
+
+    // 위젯 표시
+    removeWidgetTask('streaming-current');
+    const widgetTaskId = showStreamingInWidget(originalMessage || message);
+
+    try {
+        // 1. Jobs API로 작업 생성
+        const response = await fetch('/api/chat/submit', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                message: message,
+                agent: agent,
+                session_id: currentSessionId,
+                project: currentProject
+            })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+            throw new Error(data.error || 'Failed to submit job');
+        }
+
+        // 세션 ID 업데이트
+        if (data.session_id) {
+            currentSessionId = data.session_id;
+            localStorage.setItem('hattz_session_id', data.session_id);
+        }
+
+        currentJobId = data.job_id;
+        console.log('[Jobs] Created:', data.job_id);
+
+        // 2. 작업 결과 폴링 시작
+        removeLoading(loadingId);
+        setStatus('Processing...', true, 'thinking');
+
+        updateWidgetTask(widgetTaskId, {
+            message: originalMessage || message,
+            stage: 'waiting',
+            progress: 10,
+            startedAt: new Date().toISOString()
+        });
+
+        // 폴링 시작
+        startJobPolling(data.job_id, widgetTaskId, agent);
+
+    } catch (error) {
+        console.error('[Jobs] Error:', error);
+        removeLoading(loadingId);
+        setStatus('Error', false);
+        updateWidgetTask(widgetTaskId, {
+            message: '오류 발생',
+            stage: 'failed',
+            progress: 0
+        });
+        setTimeout(() => removeWidgetTask(widgetTaskId), 3000);
+        appendMessage('assistant', `Error: ${error.message}`, agent);
+    }
+}
+
+// Job 결과 Long Polling
+async function startJobPolling(jobId, widgetTaskId, agent) {
+    let retryCount = 0;
+    const maxRetries = 20;  // 최대 20회 (30초 × 20 = 10분)
+    let progressEstimate = 10;
+
+    const poll = async () => {
+        if (retryCount >= maxRetries) {
+            setStatus('Timeout', false);
+            updateWidgetTask(widgetTaskId, {
+                message: '시간 초과',
+                stage: 'failed',
+                progress: 0
+            });
+            appendMessage('assistant', '⚠️ 작업 시간이 초과되었습니다. 백그라운드에서 계속 처리 중일 수 있습니다.', agent);
+            currentJobId = null;
+            return;
+        }
+
+        try {
+            // Long Polling: 서버가 완료/변경될 때까지 최대 30초 대기
+            const response = await fetch(`/api/chat/job/${jobId}?wait=true&timeout=30`);
+            const data = await response.json();
+
+            if (data.status === 'completed') {
+                // 작업 완료!
+                currentJobId = null;
+                setStatus('Ready', false);
+                completeStreamingInWidget(widgetTaskId);
+                dismissRecoveryBanner();  // 복구 배너 닫기
+
+                // 응답 표시
+                if (data.response) {
+                    const msgDiv = appendMessage('assistant', data.response, agent);
+                    if (data.model_info) {
+                        addModelBadge(msgDiv, data.model_info);
+                    }
+                }
+
+                loadSessions();
+                return;  // 폴링 종료
+
+            } else if (data.status === 'failed') {
+                // 작업 실패
+                currentJobId = null;
+                setStatus('Failed', false);
+                dismissRecoveryBanner();  // 복구 배너 닫기
+                updateWidgetTask(widgetTaskId, {
+                    message: '작업 실패',
+                    stage: 'failed',
+                    progress: 0
+                });
+                setTimeout(() => removeWidgetTask(widgetTaskId), 3000);
+                appendMessage('assistant', `⚠️ 작업 실패: ${data.error || '알 수 없는 오류'}`, agent);
+                return;  // 폴링 종료
+
+            } else {
+                // 진행 중 - 상태 업데이트 후 다시 Long Polling
+                const stage = data.stage || 'thinking';
+                progressEstimate = Math.min(progressEstimate + 5, 90);
+
+                setStatus(`Processing (${stage})...`, true, stage, data.sub_agent);
+                updateWidgetTask(widgetTaskId, {
+                    message: data.status_message || '처리 중...',
+                    stage: stage,
+                    progress: progressEstimate,
+                    sub_agent: data.sub_agent
+                });
+
+                retryCount++;
+                poll();  // 재귀 호출로 다음 Long Polling
+            }
+        } catch (error) {
+            console.error('[Jobs] Poll error:', error);
+            // 네트워크 에러 시 잠시 대기 후 재시도
+            retryCount++;
+            setTimeout(poll, 2000);  // 2초 후 재시도
+        }
+    };
+
+    poll();  // 첫 번째 Long Polling 시작
+}
+
+// Job 폴링 중단
+function stopJobPolling() {
+    if (jobPollingInterval) {
+        clearInterval(jobPollingInterval);
+        jobPollingInterval = null;
+    }
+}
+
+// =============================================================================
+// SSE 모드 - 실시간 스트리밍 (기존 방식)
+// =============================================================================
+async function sendMessageViaSSE(message, agent) {
     // Show loading
     const loadingId = showLoading();
 
@@ -110,7 +289,7 @@ async function sendMessage() {
 
     // 이전 위젯 정리 후 새 위젯 표시
     removeWidgetTask('streaming-current');
-    const widgetTaskId = showStreamingInWidget(messageInput.value.trim() || message);
+    const widgetTaskId = showStreamingInWidget(message);
 
     // Create AbortController for this request
     currentAbortController = new AbortController();
@@ -1727,7 +1906,84 @@ projectSelect.addEventListener('change', async (e) => {
 // 초기 로드 시 상태 표시
 document.addEventListener('DOMContentLoaded', () => {
     setTimeout(updateProjectStatus, 500);  // 프로젝트 로드 후 실행
+
+    // Jobs API 모드: 진행 중인 작업 복구 체크
+    if (useJobsApi) {
+        setTimeout(checkPendingJobs, 1000);
+    }
 });
+
+// =============================================================================
+// 페이지 로드 시 진행 중인 Job 복구
+// =============================================================================
+async function checkPendingJobs() {
+    try {
+        // 현재 세션의 진행 중인 작업 조회
+        const response = await fetch(`/api/chat/jobs?status=processing`);
+        const data = await response.json();
+
+        if (data.jobs && data.jobs.length > 0) {
+            const pendingJob = data.jobs[0];  // 가장 최근 작업
+            console.log('[Jobs] Found pending job:', pendingJob.id);
+
+            // 상태바에 복구 알림 표시
+            showJobRecoveryBanner(pendingJob);
+        }
+    } catch (error) {
+        console.error('[Jobs] Failed to check pending jobs:', error);
+    }
+}
+
+// 진행 중인 Job 복구 배너 표시
+function showJobRecoveryBanner(job) {
+    // 기존 배너 제거
+    const existingBanner = document.getElementById('job-recovery-banner');
+    if (existingBanner) existingBanner.remove();
+
+    const banner = document.createElement('div');
+    banner.id = 'job-recovery-banner';
+    banner.className = 'job-recovery-banner';
+    banner.innerHTML = `
+        <div class="recovery-content">
+            <span class="recovery-icon">⏳</span>
+            <span class="recovery-text">백그라운드 작업 진행 중 (${job.stage || 'processing'})</span>
+            <button class="recovery-btn resume-btn" onclick="resumeJob('${job.id}')">결과 보기</button>
+            <button class="recovery-btn dismiss-btn" onclick="dismissRecoveryBanner()">닫기</button>
+        </div>
+    `;
+
+    // 헤더 아래에 삽입
+    const header = document.querySelector('.chat-header');
+    if (header) {
+        header.parentNode.insertBefore(banner, header.nextSibling);
+    } else {
+        document.body.prepend(banner);
+    }
+
+    // 자동으로 폴링 시작
+    currentJobId = job.id;
+    startJobPolling(job.id, 'recovery-widget', 'pm');
+}
+
+// Job 결과 보기 (배너에서 클릭)
+function resumeJob(jobId) {
+    console.log('[Jobs] Resuming job:', jobId);
+    dismissRecoveryBanner();
+
+    // 위젯 표시 및 폴링 시작
+    const widgetTaskId = showStreamingInWidget('이전 작업 결과 대기 중...');
+    currentJobId = jobId;
+    startJobPolling(jobId, widgetTaskId, 'pm');
+}
+
+// 복구 배너 닫기
+function dismissRecoveryBanner() {
+    const banner = document.getElementById('job-recovery-banner');
+    if (banner) {
+        banner.classList.add('fade-out');
+        setTimeout(() => banner.remove(), 300);
+    }
+}
 
 // ========================================
 // Mobile Sidebar Toggle

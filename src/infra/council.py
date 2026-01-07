@@ -62,6 +62,9 @@ class CouncilVerdict:
     summary: str
     requires_ceo: bool
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
+    # v2.3.3: JSON 기반 트리거용 메타데이터
+    trigger_source: str = "manual"  # manual, json_requires_council, json_verdict_reject
+    original_verdict_json: Optional[Dict] = None  # 트리거된 원본 JSON verdict
 
 
 # =============================================================================
@@ -267,50 +270,27 @@ PERSONAS: Dict[str, PersonaConfig] = {
 
 
 # =============================================================================
-# 위원회 유형
+# 위원회 유형 (v2.4 - PM 전용 단일 위원회)
 # =============================================================================
+# PM만 위원회 소집 가능. 다른 에이전트는 위원회 불필요.
+# PM의 의사결정 품질 검증용 - 7개 페르소나 전원 참여.
 
 COUNCIL_TYPES: Dict[str, Dict] = {
-    "code": {
-        "name": "Code Council",
-        "description": "코드 리뷰 위원회",
-        "personas": ["skeptic", "perfectionist", "pragmatist"],
+    "pm": {
+        "name": "PM Council",
+        "description": "PM 의사결정 검증 위원회 (7인 전원)",
+        "personas": [
+            "skeptic",          # 🤨 회의론자 - 근거 요구
+            "perfectionist",    # 🔬 완벽주의자 - 디테일 집착
+            "pragmatist",       # 🎯 현실주의자 - 실행 중심
+            "pessimist",        # 😰 비관론자 - 최악 가정
+            "optimist",         # 😊 낙관론자 - 가능성 발견
+            "devils_advocate",  # 😈 악마의 변호인 - 반대 의견
+            "security_hawk",    # 🦅 보안 감시자 - 취약점 탐지
+        ],
         "pass_threshold": 7.0,
         "conditional_threshold": 5.5,
-        "max_std_for_auto_pass": 1.5,  # 이 이상이면 CEO 개입
-    },
-    "strategy": {
-        "name": "Strategy Council",
-        "description": "전략 검토 위원회",
-        "personas": ["pessimist", "optimist", "devils_advocate"],
-        "pass_threshold": 7.0,
-        "conditional_threshold": 5.5,
-        "max_std_for_auto_pass": 1.5,
-    },
-    "security": {
-        "name": "Security Council",
-        "description": "보안 감사 위원회",
-        "personas": ["security_hawk", "skeptic", "pessimist"],
-        "pass_threshold": 8.0,  # 보안은 더 엄격
-        "conditional_threshold": 6.0,
-        "max_std_for_auto_pass": 1.0,  # 의견 통일 필요
-    },
-    "deploy": {
-        "name": "Deploy Council",
-        "description": "배포 승인 위원회",
-        "personas": ["security_hawk", "pessimist", "pragmatist", "perfectionist"],
-        "pass_threshold": 8.5,  # 배포는 매우 엄격
-        "conditional_threshold": 7.0,
-        "max_std_for_auto_pass": 0.5,  # 거의 만장일치 필요
-        "requires_ceo": True,  # 항상 CEO 확인
-    },
-    "mvp": {
-        "name": "MVP Council",
-        "description": "MVP 출시 판단 위원회",
-        "personas": ["pragmatist", "optimist", "skeptic"],
-        "pass_threshold": 6.5,  # MVP는 좀 더 유연
-        "conditional_threshold": 5.0,
-        "max_std_for_auto_pass": 2.0,
+        "max_std_for_auto_pass": 2.0,  # 7명이라 의견 분산 허용치 증가
     },
 }
 
@@ -592,15 +572,23 @@ CEO 검토: {'필요' if result.requires_ceo else '불필요'}
         self,
         council_type: str,
         content: str,
-        context: str = ""
+        context: str = "",
+        trigger_source: str = "manual",
+        original_verdict_json: Optional[Dict] = None
     ) -> CouncilVerdict:
         """
         위원회 소집
 
         Args:
-            council_type: 위원회 유형 (code, strategy, security, deploy, mvp)
+            council_type: 위원회 유형 (pm)
             content: 검토 대상 내용
             context: 추가 컨텍스트
+            trigger_source: 트리거 소스 (v2.3.3)
+                - "manual": 수동 소집
+                - "json_requires_council": JSON requires_council=True로 트리거
+                - "json_verdict_reject": JSON verdict=REJECT로 트리거
+                - "json_verdict_max_rewrite": MAX_REWRITE_EXHAUSTED로 트리거
+            original_verdict_json: 트리거된 원본 JSON verdict (디버깅용)
 
         Returns:
             CouncilVerdict: 판정 결과
@@ -636,6 +624,8 @@ CEO 검토: {'필요' if result.requires_ceo else '불필요'}
             judges=list(judges),
             summary=self._generate_summary(verdict, judges),
             requires_ceo=requires_ceo,
+            trigger_source=trigger_source,
+            original_verdict_json=original_verdict_json,
         )
 
         # v2.3.1: 최종 판정을 DB에 저장

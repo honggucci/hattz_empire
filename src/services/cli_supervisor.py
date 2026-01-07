@@ -31,6 +31,55 @@ CLI_CONFIG = {
     "output_max_chars": 50000,   # 출력 최대 길이
 }
 
+# Claude CLI 실행 경로 (Windows PATH 문제 우회)
+# 환경에 따라 자동 감지: 1) PATH, 2) node 직접 실행, 3) npm global cmd
+def _get_claude_cli_path() -> str:
+    """Claude CLI 실행 경로 반환"""
+    import shutil
+    import os
+
+    # 1. PATH에서 찾기 (제대로 설정된 환경)
+    claude_path = shutil.which("claude")
+    if claude_path:
+        return "claude"
+
+    # npm global 경로
+    npm_global = os.path.expanduser("~\\AppData\\Roaming\\npm")
+    cli_js = os.path.join(npm_global, "node_modules", "@anthropic-ai", "claude-code", "cli.js")
+
+    # 2. Node.js로 직접 실행 (PATH에 node 없는 경우 대비)
+    # Windows에서 가장 신뢰할 수 있는 방식
+    node_candidates = [
+        shutil.which("node"),
+        "C:\\Program Files\\nodejs\\node.exe",
+        os.path.expanduser("~\\AppData\\Local\\Programs\\nodejs\\node.exe"),
+    ]
+
+    for node_path in node_candidates:
+        if node_path and os.path.exists(node_path) and os.path.exists(cli_js):
+            return f'"{node_path}" "{cli_js}"'
+
+    # 3. npm global cmd (node가 PATH에 있는 경우만 작동)
+    claude_cmd = os.path.join(npm_global, "claude.cmd")
+    if os.path.exists(claude_cmd):
+        return f'"{claude_cmd}"'
+
+    # Fallback: 그냥 claude
+    return "claude"
+
+CLAUDE_CLI_PATH = _get_claude_cli_path()
+
+# v2.4: 프로필별 모델 설정 (API 비용 0원 - CLI만 사용)
+# coder/excavator = Opus (고품질 코드/분석)
+# reviewer/qa = Sonnet (빠른 검증)
+CLI_PROFILE_MODELS = {
+    "coder": "claude-opus-4-5-20251101",      # 코드 작성 = Opus
+    "excavator": "claude-opus-4-5-20251101",  # 의도 발굴 = Opus
+    "qa": "claude-sonnet-4-5-20250514",       # QA 검증 = Sonnet 4.5
+    "reviewer": "claude-sonnet-4-5-20250514", # 리뷰/검토 = Sonnet 4.5
+    "default": "claude-sonnet-4-5-20250514",  # 기본값 = Sonnet 4.5
+}
+
 # 역할별 세션 UUID 저장소 (task_id:role -> session_uuid)
 _session_registry: Dict[str, str] = {}
 
@@ -245,13 +294,18 @@ class CLISupervisor:
         # 서브에이전트 사용: .claude/agents/{profile}.md 자동 로드
         # --allowedTools로 프로필별 도구 제한
         # --session-id: 역할별 세션 UUID로 대화 연속성 보장
+        # --model: 프로필별 모델 지정 (v2.4)
         allowed_tools = self._get_allowed_tools(profile)
         session_uuid = self._get_or_create_session_uuid(profile)
+        model = CLI_PROFILE_MODELS.get(profile, CLI_PROFILE_MODELS["default"])
 
-        cmd = f'claude --print --session-id {session_uuid} --dangerously-skip-permissions'
+        cmd = f'{CLAUDE_CLI_PATH} --print --model {model} --session-id {session_uuid} --dangerously-skip-permissions'
         if allowed_tools:
             cmd += f' --allowedTools "{",".join(allowed_tools)}"'
         cmd += f' < "{prompt_file}"'
+
+        print(f"[CLI-Supervisor] CLI: {CLAUDE_CLI_PATH}")
+        print(f"[CLI-Supervisor] Model: {model} (profile: {profile})")
 
         return cmd
 
@@ -375,15 +429,16 @@ class CLISupervisor:
         prompt_file = Path(tempfile.gettempdir()) / f"claude_committee_{int(time.time())}_{persona}.txt"
         prompt_file.write_text(full_prompt, encoding="utf-8")
 
-        # 프로필별 도구 제한
+        # 프로필별 도구 제한 및 모델 지정 (v2.4)
         allowed_tools = self._get_allowed_tools(role)
+        model = CLI_PROFILE_MODELS.get(role, CLI_PROFILE_MODELS["default"])
 
-        cmd = f'claude --print --session-id {session_uuid} --dangerously-skip-permissions'
+        cmd = f'{CLAUDE_CLI_PATH} --print --model {model} --session-id {session_uuid} --dangerously-skip-permissions'
         if allowed_tools:
             cmd += f' --allowedTools "{",".join(allowed_tools)}"'
         cmd += f' < "{prompt_file}"'
 
-        print(f"[CLI-Supervisor] 위원회 호출: {role}:{persona} (session: {session_uuid[:8]}...)")
+        print(f"[CLI-Supervisor] 위원회 호출: {role}:{persona} (model: {model}, session: {session_uuid[:8]}...)")
 
         try:
             result = subprocess.run(

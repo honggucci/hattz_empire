@@ -1094,3 +1094,313 @@ def translate():
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+# =============================================================================
+# v2.3.2 Jobs API - 브라우저 닫아도 백그라운드에서 계속 실행
+# =============================================================================
+
+# 진행 중인 Chat Jobs 저장소 (In-memory, Production에서는 Redis 권장)
+_chat_jobs: dict[str, dict] = {}
+
+
+@chat_bp.route('/chat/submit', methods=['POST'])
+@login_required
+def submit_chat_job():
+    """
+    채팅 작업 제출 API (Jobs API 모드)
+
+    브라우저가 닫혀도 백그라운드에서 계속 실행됩니다.
+    결과는 /api/chat/job/<job_id>로 폴링하여 확인합니다.
+
+    Request JSON:
+    {
+        "message": "사용자 메시지",
+        "agent": "pm",
+        "session_id": "session_xxx",
+        "project": "hattz_empire"
+    }
+
+    Response:
+    {
+        "job_id": "chat_xxx",
+        "session_id": "session_xxx",
+        "status": "pending",
+        "message": "작업이 큐에 등록되었습니다"
+    }
+    """
+    import threading
+
+    data = request.json
+    user_message = data.get('message', '')
+    agent_role = data.get('agent', 'pm')
+    client_session_id = data.get('session_id')
+    project = data.get('project')
+
+    if not user_message:
+        return jsonify({'error': 'Message required'}), 400
+
+    # 세션 관리
+    current_session_id = client_session_id
+    if not current_session_id:
+        current_session_id = db.create_session(agent=agent_role, project=project)
+
+    set_current_session(current_session_id)
+
+    # DB에 사용자 메시지 저장
+    db.add_message(current_session_id, 'user', user_message, agent_role)
+
+    # Job ID 생성
+    job_id = f"chat_{uuid.uuid4().hex[:12]}"
+
+    # Job 초기화
+    _chat_jobs[job_id] = {
+        'id': job_id,
+        'session_id': current_session_id,
+        'agent': agent_role,
+        'message': user_message,
+        'project': project,
+        'status': 'pending',
+        'stage': 'waiting',
+        'created_at': datetime.now().isoformat(),
+        'response': None,
+        'model_info': None,
+        'error': None,
+    }
+
+    # 백그라운드 스레드로 실행
+    def run_chat_job():
+        try:
+            _execute_chat_job(job_id)
+        except Exception as e:
+            print(f"[ChatJob] Error in {job_id}: {e}")
+            _chat_jobs[job_id]['status'] = 'failed'
+            _chat_jobs[job_id]['error'] = str(e)
+
+    thread = threading.Thread(target=run_chat_job, daemon=True)
+    thread.start()
+
+    return jsonify({
+        'job_id': job_id,
+        'session_id': current_session_id,
+        'status': 'pending',
+        'message': '작업이 큐에 등록되었습니다. 브라우저를 닫아도 백그라운드에서 계속 실행됩니다.'
+    })
+
+
+def _execute_chat_job(job_id: str):
+    """
+    백그라운드에서 채팅 작업 실행
+
+    기존 chat_stream()의 로직을 동기 방식으로 실행합니다.
+    """
+    job = _chat_jobs.get(job_id)
+    if not job:
+        return
+
+    session_id = job['session_id']
+    agent_role = job['agent']
+    user_message = job['message']
+
+    try:
+        # Stage: thinking
+        job['status'] = 'processing'
+        job['stage'] = 'thinking'
+
+        # v2.3 Pre-Run Hook
+        session_rules = None
+        rules_hash = ""
+        try:
+            hook_result = run_pre_run_hook(session_id, user_message)
+            if hook_result["success"]:
+                session_rules = hook_result["session_rules"]
+                rules_hash = hook_result["rules_hash"]
+        except Exception as e:
+            print(f"[ChatJob] Pre-run error: {e}")
+
+        # LLM 호출
+        response, model_meta = call_agent(user_message, agent_role, return_meta=True)
+
+        job['stage'] = 'responding'
+
+        # [CALL:agent] 태그 처리
+        has_calls = executor.has_call_tags(response)
+        call_infos = executor.extract_call_info(response) if has_calls else []
+
+        if has_calls and call_infos:
+            job['stage'] = 'delegating'
+
+            call_results = []
+            for idx, call_info in enumerate(call_infos):
+                sub_agent = call_info['agent']
+                sub_message = call_info['message']
+
+                job['stage'] = 'calling'
+                job['sub_agent'] = sub_agent
+                job['status_message'] = f'{sub_agent.upper()} 호출 중 ({idx+1}/{len(call_infos)})'
+
+                try:
+                    sub_response, sub_meta = call_agent(sub_message, sub_agent, auto_execute=True, use_translation=False, return_meta=True)
+
+                    # Static Gate 검사
+                    if session_rules:
+                        static_result = run_static_gate(sub_response, session_rules, session_id)
+                        if not static_result["passed"]:
+                            print(f"[ChatJob] Static Gate REJECT: {sub_agent}")
+
+                    call_results.append({
+                        'agent': sub_agent,
+                        'message': sub_message,
+                        'response': sub_response,
+                    })
+
+                    # DB에 하위 에이전트 응답 저장
+                    db.add_message(session_id, 'assistant', f"[{sub_agent.upper()}]\n{sub_response}", sub_agent, is_internal=True)
+
+                except Exception as e:
+                    print(f"[ChatJob] Sub-agent error {sub_agent}: {e}")
+
+            # 결과 종합
+            if call_results:
+                job['stage'] = 'summarizing'
+                job['status_message'] = 'PM이 결과를 종합하고 있습니다...'
+
+                followup_prompt = build_call_results_prompt(call_results)
+                final_response, final_meta = call_agent(followup_prompt, agent_role, return_meta=True)
+
+                # 최종 응답 저장
+                db.add_message(session_id, 'assistant', final_response, agent_role)
+
+                job['response'] = final_response
+                job['model_info'] = final_meta
+            else:
+                # CALL은 있었지만 결과 없음
+                db.add_message(session_id, 'assistant', response, agent_role)
+                job['response'] = response
+                job['model_info'] = model_meta
+        else:
+            # CALL 태그 없음 - PM 응답만
+            db.add_message(session_id, 'assistant', response, agent_role)
+            job['response'] = response
+            job['model_info'] = model_meta
+
+        # 완료
+        job['status'] = 'completed'
+        job['stage'] = 'done'
+        job['completed_at'] = datetime.now().isoformat()
+
+        print(f"[ChatJob] Completed: {job_id}")
+
+    except Exception as e:
+        job['status'] = 'failed'
+        job['error'] = str(e)
+        job['completed_at'] = datetime.now().isoformat()
+        print(f"[ChatJob] Failed: {job_id} - {e}")
+
+
+@chat_bp.route('/chat/job/<job_id>', methods=['GET'])
+@login_required
+def get_chat_job(job_id: str):
+    """
+    채팅 작업 상태 조회 API (Long Polling 지원)
+
+    Query params:
+    - wait: true면 Long Polling (최대 30초 대기)
+    - timeout: 대기 시간 (초, 기본 30, 최대 60)
+
+    Long Polling:
+    - 작업이 완료/실패될 때까지 응답을 보류
+    - 완료되면 즉시 응답
+    - timeout 도달 시 현재 상태 반환
+
+    Response:
+    {
+        "id": "chat_xxx",
+        "status": "processing|completed|failed",
+        "stage": "thinking|responding|delegating|calling|summarizing|done",
+        "response": "AI 응답 (완료 시)",
+        "model_info": {...},
+        "error": "에러 메시지 (실패 시)"
+    }
+    """
+    job = _chat_jobs.get(job_id)
+
+    if not job:
+        return jsonify({'error': 'Job not found'}), 404
+
+    # Long Polling 처리
+    use_long_poll = request.args.get('wait', 'false').lower() == 'true'
+    timeout = min(int(request.args.get('timeout', 30)), 60)  # 최대 60초
+
+    if use_long_poll and job['status'] not in ('completed', 'failed'):
+        # 완료될 때까지 대기 (0.5초 간격 체크)
+        import time
+        start_time = time.time()
+        last_stage = job.get('stage')
+
+        while time.time() - start_time < timeout:
+            job = _chat_jobs.get(job_id)
+            if not job:
+                return jsonify({'error': 'Job not found'}), 404
+
+            # 완료/실패 시 즉시 반환
+            if job['status'] in ('completed', 'failed'):
+                break
+
+            # stage 변경 시에도 반환 (진행 상황 업데이트)
+            current_stage = job.get('stage')
+            if current_stage != last_stage:
+                last_stage = current_stage
+                break
+
+            time.sleep(0.5)  # 0.5초 대기
+
+    return jsonify({
+        'id': job['id'],
+        'session_id': job['session_id'],
+        'status': job['status'],
+        'stage': job.get('stage', 'waiting'),
+        'sub_agent': job.get('sub_agent'),
+        'status_message': job.get('status_message', ''),
+        'response': job.get('response'),
+        'model_info': job.get('model_info'),
+        'error': job.get('error'),
+        'created_at': job.get('created_at'),
+        'completed_at': job.get('completed_at'),
+    })
+
+
+@chat_bp.route('/chat/jobs', methods=['GET'])
+@login_required
+def list_chat_jobs():
+    """
+    현재 세션의 채팅 작업 목록 조회
+
+    Query params:
+    - session_id: 세션 ID (optional)
+    - status: 상태 필터 (pending|processing|completed|failed)
+    """
+    session_id = request.args.get('session_id') or get_current_session()
+    status_filter = request.args.get('status')
+
+    jobs = []
+    for job in _chat_jobs.values():
+        if session_id and job['session_id'] != session_id:
+            continue
+        if status_filter and job['status'] != status_filter:
+            continue
+        jobs.append({
+            'id': job['id'],
+            'status': job['status'],
+            'stage': job.get('stage'),
+            'created_at': job.get('created_at'),
+            'completed_at': job.get('completed_at'),
+        })
+
+    # 최신순 정렬
+    jobs.sort(key=lambda x: x.get('created_at', ''), reverse=True)
+
+    return jsonify({
+        'jobs': jobs[:20],  # 최근 20개만
+        'total': len(jobs)
+    })

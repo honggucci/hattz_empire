@@ -37,6 +37,7 @@ class ModelConfig:
     temperature: float = 0.7
     max_tokens: int = 4096
     thinking_mode: bool = False  # GPT-5.2 Thinking Extend 모드
+    reasoning_effort: Optional[str] = None  # GPT-5.2: "high", "xhigh", None (Extended Thinking)
 
 
 @dataclass
@@ -208,9 +209,9 @@ MODELS = {
         max_tokens=8192,
     ),
     "claude_sonnet": ModelConfig(
-        name="Claude Sonnet 4",
+        name="Claude Sonnet 4.5",
         provider="anthropic",
-        model_id="claude-sonnet-4-20250514",
+        model_id="claude-sonnet-4-5-20250514",
         api_key_env="ANTHROPIC_API_KEY",
         temperature=0.2,
         max_tokens=8192,
@@ -224,15 +225,16 @@ MODELS = {
         max_tokens=8192,
     ),
 
-    # OpenAI - Thinking Extend 모드 (max_tokens 증가, temperature 낮춤)
+    # OpenAI - Thinking Extend 모드 (max_tokens 증가, reasoning_effort로 Extended Thinking 활성화)
     "gpt_thinking": ModelConfig(
         name="GPT-5.2 Thinking",
         provider="openai",
         model_id="gpt-5.2",
         api_key_env="OPENAI_API_KEY",
-        temperature=0.2,  # 논리적 추론을 위해 낮춤
+        temperature=0.2,  # reasoning_effort 사용 시 무시됨 (OpenAI 제약)
         max_tokens=16384,  # Thinking Extend: 충분한 토큰
         thinking_mode=True,
+        reasoning_effort="high",  # Extended Thinking 활성화 ("high" or "xhigh")
     ),
 
     # Google - Gemini 2.5 Flash
@@ -332,10 +334,17 @@ DUAL_ENGINES = {
 
 # =============================================================================
 # 단일 엔진 (PM, Analyst)
+# v2.4: PM → Claude CLI 전환 (API 비용 절감)
 # =============================================================================
 
+# CLI 프로필 설정 (claude_cli provider용)
+CLI_PROFILES = {
+    "pm": "reviewer",       # PM은 분석/검토 프로필
+    "analyst": None,        # analyst는 Gemini 유지
+}
+
 SINGLE_ENGINES = {
-    "pm": MODELS["claude_sonnet"],         # PM은 뇌다. 비용 아끼지 마라.
+    "pm": "claude_cli",                    # v2.4: PM → Claude CLI (EXEC)
     "analyst": MODELS["gemini_flash"],     # 로그 분석은 싼 거 써 (눈 역할)
 }
 
@@ -1182,120 +1191,14 @@ PROJECTS = {
 
 
 # =============================================================================
-# COMMITTEE CONFIG v2.2 - Self-Refinement Loop with CLI Committees
+# COMMITTEE CONFIG v2.4 - PM 전용 위원회 (단순화)
 # =============================================================================
-# 각 역할별 3인 위원회 구성
-# 1단계: API (GPT/Gemini)로 초안 작성
-# 2단계: Claude CLI 위원회 (3개 세션)에서 3+ 라운드 검토
-# 결과: 처음엔 실수해도 최종 완벽한 산출물
+# v2.4: 위원회는 PM만 사용. coder/qa/reviewer 위원회 제거.
+# PM 의사결정 품질 검증용으로만 위원회 유지.
+# 실제 위원회 로직은 src/infra/council.py 참조.
 
-COMMITTEE_CONFIG = {
-    # =========================================================================
-    # CODER 위원회: 코드 품질 극대화
-    # =========================================================================
-    "coder": {
-        "draft_engine": "gpt_thinking",  # 초안: GPT-5.2 Thinking
-        "committee": [
-            {
-                "persona": "implementer",
-                "role": "초안 작성자",
-                "prompt_prefix": """You are the IMPLEMENTER. Write clean, working code.
-Focus on: correctness, readability, type hints.
-Output: Code only, minimal comments.""",
-            },
-            {
-                "persona": "devils_advocate",
-                "role": "반박자",
-                "prompt_prefix": """You are the DEVIL'S ADVOCATE. Challenge everything.
-Focus on: edge cases, failure modes, "what if this breaks?"
-Output: List of issues found, each with severity and fix suggestion.
-If code is solid, say "NO ISSUES FOUND" (rare).""",
-            },
-            {
-                "persona": "perfectionist",
-                "role": "품질 검증자",
-                "prompt_prefix": """You are the PERFECTIONIST. Nothing escapes your review.
-Focus on: missed edge cases, performance, maintainability.
-Output: Final verdict (APPROVE/REVISE) + improvement suggestions.
-Be harsh but constructive.""",
-            },
-        ],
-        "min_rounds": 3,  # 최소 3라운드 검토
-        "max_rounds": 5,  # 최대 5라운드
-        "approval_threshold": 2,  # 2/3 승인 필요
-    },
-
-    # =========================================================================
-    # QA 위원회: 버그 제로
-    # =========================================================================
-    "qa": {
-        "draft_engine": "gpt_thinking",  # 초안: GPT-5.2 Thinking
-        "committee": [
-            {
-                "persona": "tester",
-                "role": "테스트 작성자",
-                "prompt_prefix": """You are the TESTER. Write comprehensive tests.
-Focus on: unit tests, integration tests, edge cases.
-Output: pytest code with clear test names.""",
-            },
-            {
-                "persona": "breaker",
-                "role": "파괴자",
-                "prompt_prefix": """You are the BREAKER. Your job is to break the code.
-Focus on: unusual inputs, race conditions, state corruption.
-Output: Attack vectors that could break the code.""",
-            },
-            {
-                "persona": "coverage_hawk",
-                "role": "커버리지 감시자",
-                "prompt_prefix": """You are the COVERAGE HAWK. No code path escapes testing.
-Focus on: untested branches, missing assertions, boundary conditions.
-Output: Coverage gaps and required additional tests.""",
-            },
-        ],
-        "min_rounds": 3,
-        "max_rounds": 5,
-        "approval_threshold": 2,
-    },
-
-    # =========================================================================
-    # REVIEWER 위원회: 배포 전 최종 관문
-    # =========================================================================
-    "reviewer": {
-        "draft_engine": "gemini_flash",  # 초안: Gemini 2.5 Flash (대용량 코드 분석)
-        "committee": [
-            {
-                "persona": "security_hawk",
-                "role": "보안 전문가",
-                "prompt_prefix": """You are the SECURITY HAWK. Find vulnerabilities.
-Focus on: OWASP Top 10, injection, auth bypass, data exposure.
-Output: Vulnerabilities with severity (CRITICAL/HIGH/MEDIUM/LOW).""",
-            },
-            {
-                "persona": "performance_critic",
-                "role": "성능 비평가",
-                "prompt_prefix": """You are the PERFORMANCE CRITIC. Optimize everything.
-Focus on: N+1 queries, memory leaks, O(n²) algorithms, blocking calls.
-Output: Performance issues with impact assessment.""",
-            },
-            {
-                "persona": "pragmatist",
-                "role": "현실주의자",
-                "prompt_prefix": """You are the PRAGMATIST. Balance quality vs shipping.
-Focus on: is it good enough? what's the real risk? over-engineering?
-Output: Final SHIP/HOLD decision with rationale.""",
-            },
-        ],
-        "min_rounds": 2,  # 리뷰는 2라운드면 충분
-        "max_rounds": 4,
-        "approval_threshold": 2,
-    },
-}
-
-
-def get_committee_config(role: str) -> Optional[dict]:
-    """위원회 설정 가져오기"""
-    return COMMITTEE_CONFIG.get(role)
+# DEPRECATED: COMMITTEE_CONFIG 제거됨
+# 위원회 설정은 llm_caller.py의 COUNCIL_MODEL_MAPPING 사용
 
 
 # =============================================================================
@@ -1327,7 +1230,95 @@ def get_ceo_profile() -> str:
 
 
 def get_system_prompt(role: str) -> str:
+    """
+    시스템 프롬프트 가져오기 (v2.4 Persona Pack)
+
+    우선순위:
+    1. .claude/agents/{role}.md 파일 (페르소나)
+    2. SYSTEM_PROMPTS[role] (레거시 폴백)
+
+    페르소나 파일 사용 시 GLOBAL_RULES.md를 자동으로 prepend함.
+    """
+    persona_prompt = _load_persona(role)
+    if persona_prompt:
+        return persona_prompt
     return SYSTEM_PROMPTS.get(role, "")
+
+
+# =============================================================================
+# Persona Pack Loader (v2.4)
+# =============================================================================
+
+_persona_cache: dict[str, str] = {}
+_global_rules_cache: str | None = None
+
+def _load_global_rules() -> str:
+    """GLOBAL_RULES.md 로드 (캐싱)"""
+    global _global_rules_cache
+    if _global_rules_cache is not None:
+        return _global_rules_cache
+
+    global_rules_path = Path(__file__).parent / ".claude" / "agents" / "GLOBAL_RULES.md"
+    if global_rules_path.exists():
+        try:
+            content = global_rules_path.read_text(encoding="utf-8")
+            _global_rules_cache = content
+            print(f"[Persona] GLOBAL_RULES.md loaded ({len(content)} chars)")
+            return content
+        except Exception as e:
+            print(f"[Persona] Failed to load GLOBAL_RULES.md: {e}")
+            _global_rules_cache = ""
+            return ""
+    _global_rules_cache = ""
+    return ""
+
+
+def _load_persona(role: str) -> str | None:
+    """
+    .claude/agents/{role}.md 파일에서 페르소나 로드
+
+    Returns:
+        str: GLOBAL_RULES + 페르소나 내용 (frontmatter 제거)
+        None: 파일 없으면 None (레거시 폴백 사용)
+    """
+    if role in _persona_cache:
+        return _persona_cache[role]
+
+    persona_path = Path(__file__).parent / ".claude" / "agents" / f"{role}.md"
+    if not persona_path.exists():
+        return None
+
+    try:
+        content = persona_path.read_text(encoding="utf-8")
+
+        # frontmatter 제거 (--- ... ---)
+        if content.startswith("---"):
+            parts = content.split("---", 2)
+            if len(parts) >= 3:
+                content = parts[2].strip()
+
+        # GLOBAL_RULES prepend
+        global_rules = _load_global_rules()
+        if global_rules:
+            full_prompt = f"{global_rules}\n\n---\n\n{content}"
+        else:
+            full_prompt = content
+
+        _persona_cache[role] = full_prompt
+        print(f"[Persona] {role}.md loaded ({len(full_prompt)} chars)")
+        return full_prompt
+
+    except Exception as e:
+        print(f"[Persona] Failed to load {role}.md: {e}")
+        return None
+
+
+def clear_persona_cache():
+    """페르소나 캐시 클리어 (개발/테스트용)"""
+    global _persona_cache, _global_rules_cache
+    _persona_cache = {}
+    _global_rules_cache = None
+    print("[Persona] Cache cleared")
 
 
 def get_project(project_id: str) -> Optional[dict]:

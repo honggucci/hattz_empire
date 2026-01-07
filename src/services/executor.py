@@ -953,6 +953,12 @@ class RefinementResult:
     error: Optional[str] = None
 
 
+# =============================================================================
+# DEPRECATED: v2.4에서 위원회가 PM 전용으로 변경됨
+# execute_with_refinement()는 더 이상 사용되지 않음
+# 위원회 기능은 llm_caller.py의 should_convene_council() + convene_council_sync() 사용
+# =============================================================================
+
 def execute_with_refinement(
     task: str,
     role: str,
@@ -960,7 +966,10 @@ def execute_with_refinement(
     session_id: str = None
 ) -> RefinementResult:
     """
-    Self-Refinement Loop 실행
+    DEPRECATED: v2.4에서 PM 전용 위원회로 변경됨.
+    이 함수는 더 이상 사용되지 않음.
+
+    Self-Refinement Loop 실행 (레거시)
 
     1단계: API (GPT/Gemini)로 초안 작성
     2단계: Claude CLI 위원회 (3개 세션)에서 3+ 라운드 검토
@@ -968,7 +977,7 @@ def execute_with_refinement(
 
     Args:
         task: 실행할 태스크
-        role: 역할 (coder/qa/reviewer)
+        role: 역할 (coder/qa/reviewer) - v2.4에서 미사용
         task_id: 태스크 ID
         session_id: 세션 ID
 

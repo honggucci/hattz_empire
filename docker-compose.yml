@@ -15,7 +15,7 @@
 name: hattz-empire-v2-2
 
 volumes:
-  claude_state:   # /root/.claude 영속화 (로그인/세션/설정)
+  claude_state:   # /root/.claude-state 영속화 (로그인/세션)
 
 networks:
   hattz:
@@ -74,7 +74,7 @@ services:
       - ANTHROPIC_API_KEY=
     volumes:
       - ./:/app:ro
-      - ./.claude:/root/.claude:ro
+      - ./.claude:/root/.claude:rw
       - claude_state:/root/.claude-state:rw
 
   # ===========================================================================
@@ -95,7 +95,7 @@ services:
       - ANTHROPIC_API_KEY=
     volumes:
       - ./:/app:rw  # 유일하게 전체 RW
-      - ./.claude:/root/.claude:ro
+      - ./.claude:/root/.claude:rw
       - claude_state:/root/.claude-state:rw
 
   coder-reviewer:
@@ -111,7 +111,7 @@ services:
       - ANTHROPIC_API_KEY=
     volumes:
       - ./:/app:ro
-      - ./.claude:/root/.claude:ro
+      - ./.claude:/root/.claude:rw
       - claude_state:/root/.claude-state:rw
 
   # ===========================================================================
@@ -133,7 +133,7 @@ services:
     volumes:
       - ./:/app:ro
       - ./tests:/app/tests:rw  # tests만 쓰기 가능
-      - ./.claude:/root/.claude:ro
+      - ./.claude:/root/.claude:rw
       - claude_state:/root/.claude-state:rw
 
   qa-reviewer:
@@ -149,7 +149,7 @@ services:
       - ANTHROPIC_API_KEY=
     volumes:
       - ./:/app:ro
-      - ./.claude:/root/.claude:ro
+      - ./.claude:/root/.claude:rw
       - claude_state:/root/.claude-state:rw
 
   # ===========================================================================
@@ -183,5 +183,29 @@ services:
       - ANTHROPIC_API_KEY=
     volumes:
       - ./:/app:ro
-      - ./.claude:/root/.claude:ro
+      - ./.claude:/root/.claude:rw
       - claude_state:/root/.claude-state:rw
+
+  # ===========================================================================
+  # MONITORING LAYER
+  # Prometheus + Grafana (All-in-One)
+  # ===========================================================================
+  monitor:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.monitor
+    container_name: hattz_monitor
+    networks: [hattz]
+    restart: unless-stopped
+    ports:
+      - "9090:9090"   # Prometheus
+      - "3000:3000"   # Grafana
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=hattz123
+    volumes:
+      - ./docker/prometheus:/etc/prometheus:ro
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./docker/grafana/dashboards:/var/lib/grafana/dashboards:ro

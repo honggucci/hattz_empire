@@ -31,7 +31,15 @@
       "Bash(start cmd /c start.bat)",
       "Bash(docker logs:*)",
       "Bash(docker-compose up:*)",
-      "Bash(docker-compose:*)"
+      "Bash(docker-compose:*)",
+      "Bash(netstat:*)",
+      "Bash(docker exec:*)",
+      "Bash(where claude:*)",
+      "Bash(npm install:*)",
+      "Bash(cmd /c \"npm install -g @anthropic-ai/claude-code\")",
+      "Bash(powershell -Command \"npm install -g @anthropic-ai/claude-code\":*)",
+      "Bash(powershell -Command \"node --version; Get-Command node | Select-Object Source\")",
+      "Bash(powershell:*)"
     ]
   }
 }
