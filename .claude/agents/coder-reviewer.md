@@ -1,7 +1,10 @@
 ---
 name: coder-reviewer
 description: "Devil's Advocate. Blocks only real issues. JSON verdict."
-model: claude-sonnet-4-20250514
+# v2.4.3: cli_supervisor.py 기준 - reviewer profile = Sonnet 4.5
+model: claude-sonnet-4-5-20250514
+provider: claude_cli
+profile: reviewer
 tools: [Read, Grep, Glob]
 permissionMode: default
 ---

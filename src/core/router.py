@@ -178,8 +178,8 @@ class HattzRouter:
         # 에이전트 역할 → 기본 티어 매핑 (v2.1)
         # =====================================================================
         self.agent_to_tier = {
-            # STANDARD - 뇌 역할 (GPT-5.2 pro medium)
-            "pm": ModelTier.STANDARD,         # PM은 뇌다. JSON/[CALL]만 출력
+            # SAFETY - PM은 Opus 4.5 (똑똑한 라우터 필요)
+            "pm": ModelTier.SAFETY,           # PM은 뇌다. Opus 4.5 사용
             "excavator": ModelTier.STANDARD,  # 의도 정제 (요구사항/제약/수용기준)
 
             # VIP_THINKING - 깊은 추론 (GPT-5.2 pro high) - 조건부만
@@ -271,11 +271,6 @@ class HattzRouter:
         """
         msg = (message or "").strip()
         msg_lower = msg.lower()
-
-        # 0. CEO 프리픽스 체크 (최우선)
-        prefix_result = self._check_ceo_prefix(message)
-        if prefix_result:
-            return prefix_result
 
         # 1. 고위험 체크 → SAFETY 강제
         if self._is_high_risk(msg_lower):
@@ -372,49 +367,6 @@ class HattzRouter:
             fallback_spec=self._get_fallback(model),
             escalate_to=escalate_to
         )
-
-    def _check_ceo_prefix(self, message: str) -> Optional[RoutingDecision]:
-        """
-        CEO 프리픽스 체크 - VIP 모델 강제 호출
-
-        프리픽스:
-        - 최고/ : VIP-AUDIT (Opus 4.5) 강제 호출
-        - 생각/ : VIP-THINKING (GPT-5.2 Thinking Extend) 강제 호출
-        - 검색/ : RESEARCH (Perplexity) 강제 호출
-
-        예시:
-        - "최고/ 이 코드 리뷰해줘" → Opus 4.5 사용
-        - "생각/ 왜 이게 안될까?" → GPT-5.2 Thinking Extend 사용
-        - "검색/ 최신 파이썬 버전" → Perplexity 사용
-        """
-        # VIP-AUDIT 강제 (최고/)
-        if message.startswith("최고/") or message.startswith("최고/ "):
-            return self._create_decision(
-                self.VIP_AUDIT_MODEL,
-                "CEO prefix '최고/' → VIP-AUDIT (Opus 4.5) 강제",
-                0,
-                escalate_to=None  # 이미 최고 티어
-            )
-
-        # VIP-THINKING 강제 (생각/)
-        if message.startswith("생각/") or message.startswith("생각/ "):
-            return self._create_decision(
-                self.VIP_THINKING_MODEL,
-                "CEO prefix '생각/' → VIP-THINKING 강제",
-                0,
-                escalate_to=self.VIP_AUDIT_MODEL
-            )
-
-        # RESEARCH 강제 (검색/)
-        if message.startswith("검색/") or message.startswith("검색/ "):
-            return self._create_decision(
-                self.RESEARCH_MODEL,
-                "CEO prefix '검색/' → RESEARCH (Perplexity) 강제",
-                0,
-                escalate_to=self.STANDARD_MODEL
-            )
-
-        return None
 
     def _is_high_risk(self, message: str) -> bool:
         """고위험 키워드 체크 (v2.1)"""
@@ -520,18 +472,13 @@ class HattzRouter:
             return f"[Error] {spec.provider}: {str(e)}"
 
     def _call_anthropic(self, spec: ModelSpec, messages: list, system_prompt: str) -> str:
-        """Anthropic API 호출"""
-        import anthropic
-        client = anthropic.Anthropic(api_key=os.getenv(spec.api_key_env))
+        """Anthropic API → CLI 리다이렉트 (v2.4.3 - API 비용 0원)"""
+        from src.services.cli_supervisor import call_claude_cli
 
-        response = client.messages.create(
-            model=spec.model_id,
-            max_tokens=spec.max_tokens,
-            temperature=spec.temperature,
-            system=system_prompt,
-            messages=messages
-        )
-        return response.content[0].text
+        # model_id로 프로필 결정 (opus=coder, sonnet=reviewer)
+        profile = "coder" if "opus" in spec.model_id.lower() else "reviewer"
+
+        return call_claude_cli(messages, system_prompt, profile)
 
     def _call_openai(self, spec: ModelSpec, messages: list, system_prompt: str) -> str:
         """OpenAI API 호출"""

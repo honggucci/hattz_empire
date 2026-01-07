@@ -6,10 +6,14 @@ LLM API 호출 및 에이전트 로직
 - 듀얼 엔진 와이어링 (Writer + Auditor 패턴)
 - 위원회 자동 소집 + 모델 할당
 - 루프 브레이커 추가
+
+2026.01.07 업데이트:
+- Analyst 파일 컨텍스트 주입 (Gemini는 파일시스템 접근 불가)
 """
 import os
 import time as time_module
 import asyncio
+import glob as glob_module
 from typing import Optional, Tuple, Dict, Any
 
 import sys
@@ -22,8 +26,121 @@ if str(root_dir) not in sys.path:
 
 from config import (
     MODELS, DUAL_ENGINES, SINGLE_ENGINES,
-    get_system_prompt, ModelConfig
+    get_system_prompt, ModelConfig,
+    ENFORCE_OUTPUT_CONTRACT, CONTRACT_EXEMPT_AGENTS  # v2.5
 )
+
+# v2.5: Output Contract + Format Gate
+from src.core.contracts import (
+    validate_output,
+    get_contract,
+    get_schema_prompt,
+    extract_json_from_output,
+    FormatGateError,
+    CONTRACT_REGISTRY
+)
+
+
+# =============================================================================
+# Analyst 파일 컨텍스트 수집 (Gemini는 파일시스템 접근 불가)
+# =============================================================================
+
+# 프로젝트별 루트 경로 매핑
+PROJECT_PATHS = {
+    "hattz_empire": Path(__file__).parent.parent.parent,  # 현재 프로젝트
+    "wpcn": Path("C:/Users/hahonggu/Desktop/coin_master/projects/wpcn-backtester-cli-noflask"),
+}
+
+
+def collect_project_context(project_name: str, max_files: int = 50, max_chars: int = 30000) -> str:
+    """
+    프로젝트 파일 구조와 주요 파일 내용을 수집하여 Analyst에게 전달할 컨텍스트 생성
+
+    Args:
+        project_name: 프로젝트명 (hattz_empire, wpcn 등)
+        max_files: 최대 파일 수
+        max_chars: 최대 문자 수
+
+    Returns:
+        str: 프로젝트 컨텍스트 문자열
+    """
+    project_root = PROJECT_PATHS.get(project_name)
+    if not project_root or not project_root.exists():
+        return f"[ERROR] 프로젝트 '{project_name}' 경로를 찾을 수 없습니다."
+
+    context_parts = []
+    context_parts.append(f"# 프로젝트: {project_name}")
+    context_parts.append(f"# 경로: {project_root}")
+    context_parts.append("")
+
+    # 1. 파일 구조 수집
+    context_parts.append("## 파일 구조")
+    py_files = list(project_root.glob("**/*.py"))
+    md_files = list(project_root.glob("**/*.md"))
+
+    # __pycache__, .git, node_modules 제외
+    exclude_dirs = {'__pycache__', '.git', 'node_modules', '.venv', 'venv', '.claude'}
+    py_files = [f for f in py_files if not any(d in str(f) for d in exclude_dirs)]
+    md_files = [f for f in md_files if not any(d in str(f) for d in exclude_dirs)]
+
+    context_parts.append(f"- Python 파일: {len(py_files)}개")
+    context_parts.append(f"- Markdown 파일: {len(md_files)}개")
+    context_parts.append("")
+
+    # 2. 디렉토리별 파일 목록
+    context_parts.append("## 디렉토리 구조")
+    dirs = {}
+    for f in py_files[:max_files]:
+        rel_path = f.relative_to(project_root)
+        parent = str(rel_path.parent)
+        if parent not in dirs:
+            dirs[parent] = []
+        dirs[parent].append(rel_path.name)
+
+    for dir_name, files in sorted(dirs.items()):
+        context_parts.append(f"  {dir_name}/")
+        for fname in sorted(files)[:10]:  # 디렉토리당 최대 10개
+            context_parts.append(f"    - {fname}")
+        if len(files) > 10:
+            context_parts.append(f"    ... 외 {len(files) - 10}개")
+    context_parts.append("")
+
+    # 3. 주요 파일 내용 (CLAUDE.md, README.md, config.py 등)
+    context_parts.append("## 주요 파일 내용")
+    important_files = [
+        "CLAUDE.md", "README.md", "config.py", "app.py",
+        "src/core/llm_caller.py", "src/api/chat.py"
+    ]
+
+    total_chars = len("\n".join(context_parts))
+    for fname in important_files:
+        if total_chars >= max_chars:
+            context_parts.append(f"\n[TRUNCATED] 최대 {max_chars}자 초과로 중단")
+            break
+
+        fpath = project_root / fname
+        if fpath.exists():
+            try:
+                content = fpath.read_text(encoding='utf-8')
+                # 파일당 최대 5000자
+                if len(content) > 5000:
+                    content = content[:5000] + "\n... (truncated)"
+                context_parts.append(f"\n### {fname}")
+                context_parts.append("```")
+                context_parts.append(content)
+                context_parts.append("```")
+                total_chars += len(content) + 100
+            except Exception as e:
+                context_parts.append(f"\n### {fname}")
+                context_parts.append(f"[ERROR] 읽기 실패: {e}")
+
+    # 4. 테스트 파일 수 (품질 지표)
+    test_files = [f for f in py_files if 'test' in f.name.lower()]
+    context_parts.append(f"\n## 테스트 파일: {len(test_files)}개")
+    for tf in test_files[:5]:
+        context_parts.append(f"  - {tf.relative_to(project_root)}")
+
+    return "\n".join(context_parts)
 
 
 # =============================================================================
@@ -81,35 +198,7 @@ DUAL_ENGINE_ROLES = {
     },
 }
 
-# VIP 프리픽스용 듀얼 엔진 (VIP Writer + VIP Auditor + Stamp)
-# v2.4.3: GPT-5 mini 제거, 전부 Sonnet 4로 통일
-VIP_DUAL_ENGINE = {
-    "최고/": {  # VIP-AUDIT 기반 (Claude CLI)
-        "writer": "claude_cli",           # CLI Opus - VIP Writer
-        "auditor": "claude_cli",          # CLI Sonnet 4 - VIP Auditor
-        "stamp": "claude_cli",            # CLI Sonnet 4 - strict_verdict_clerk
-        "description": "VIP-AUDIT: Opus + Sonnet 크로스체크",
-        "writer_profile": "coder",        # Opus
-        "auditor_profile": "reviewer",    # Sonnet 4
-        "stamp_profile": "reviewer",      # Sonnet 4
-    },
-    "생각/": {  # GPT-5.2 Thinking 기반
-        "writer": "gpt_thinking",         # GPT-5.2 Thinking Extended (뇌)
-        "auditor": "claude_cli",          # CLI Sonnet 4 - 크로스체크
-        "stamp": "claude_cli",            # CLI Sonnet 4 - strict_verdict_clerk
-        "description": "VIP-THINKING: GPT-5.2 (뇌) + Sonnet 크로스체크",
-        "auditor_profile": "reviewer",    # Sonnet 4
-        "stamp_profile": "reviewer",      # Sonnet 4
-    },
-    "검색/": {  # Perplexity 기반
-        "writer": "perplexity_sonar",     # Perplexity Sonar Pro - 검색
-        "auditor": "claude_cli",          # CLI Sonnet 4 - 팩트체크 (GPT-5 mini 제거)
-        "stamp": "claude_cli",            # CLI Sonnet 4 - strict_verdict_clerk
-        "description": "RESEARCH: Perplexity + Sonnet 팩트체크",
-        "auditor_profile": "reviewer",    # Sonnet 4
-        "stamp_profile": "reviewer",      # Sonnet 4
-    },
-}
+# VIP_DUAL_ENGINE 삭제됨 (v2.4.4 - CEO 프리픽스 기능 제거)
 
 # 위원회별 모델 할당 - CLI 기반 (Claude Code CLI 사용)
 # v2.4: PM 전용 단일 위원회 - 7개 페르소나 전원 참여
@@ -125,7 +214,7 @@ COUNCIL_MODEL_MAPPING = {
             "security_hawk": "cli",     # 🦅 보안 감시자 - 취약점 탐지
         },
         "tiebreaker": "cli",
-        "use_cli": True,
+        "use_cli": True,  # CLI 사용
     },
 }
 
@@ -170,21 +259,13 @@ Think step-by-step internally before outputting your final structured response.
 
 
 def call_anthropic(model_config: ModelConfig, messages: list, system_prompt: str) -> str:
-    """Anthropic API 호출"""
-    try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=os.getenv(model_config.api_key_env))
+    """Anthropic API → CLI 리다이렉트 (v2.4.3 - API 비용 0원)"""
+    from src.services.cli_supervisor import call_claude_cli
 
-        response = client.messages.create(
-            model=model_config.model_id,
-            max_tokens=model_config.max_tokens,
-            temperature=model_config.temperature,
-            system=system_prompt,
-            messages=messages
-        )
-        return response.content[0].text
-    except Exception as e:
-        return f"[Anthropic Error] {str(e)}"
+    # model_id로 프로필 결정 (opus=coder, sonnet=reviewer)
+    profile = "coder" if "opus" in model_config.model_id.lower() else "reviewer"
+
+    return call_claude_cli(messages, system_prompt, profile)
 
 
 def call_openai(model_config: ModelConfig, messages: list, system_prompt: str) -> str:
@@ -432,13 +513,21 @@ def dual_engine_write_audit_rewrite(
 
     rewrite_count = 0
     audit_history = []
+    format_validated = False
 
-    # 1단계: Writer 초안 작성
+    # 1단계: Writer 초안 작성 (v2.5 Format Gate 적용)
     print(f"[Dual-V3] {role} Writer ({writer_key}) 초안 작성 중...")
-    draft, writer_name = _call_model_or_cli(writer_key, messages, system_prompt, writer_profile)
+    draft, writer_name, format_validated = _call_with_contract(
+        writer_key, messages, system_prompt, writer_profile, role
+    )
 
     if "[Error]" in draft or "[CLI Error]" in draft:
         return draft, {"dual": True, "error": "writer_failed", "version": "v3"}
+
+    # v2.5: Format Gate 경고 표시
+    if not format_validated and "[FORMAT_WARNING]" in draft:
+        print(f"[Dual-V3] Writer 출력 형식 검증 실패, Auditor에게 전달")
+        draft = draft.replace("[FORMAT_WARNING] ", "")
 
     while rewrite_count < max_rewrite:
         # 2단계: Auditor 리뷰 (JSON 출력 강제) - v2.4.2 강화된 프롬프트
@@ -515,6 +604,7 @@ def dual_engine_write_audit_rewrite(
                 "rewrite_count": rewrite_count,
                 "audit_history": audit_history,
                 "requires_council": audit.get("requires_council", False),
+                "format_validated": format_validated,  # v2.5
             }
             return draft, meta
 
@@ -531,6 +621,7 @@ def dual_engine_write_audit_rewrite(
                 "audit_history": audit_history,
                 "requires_council": True,  # REJECT면 무조건 Council
                 "rejection_reason": audit.get("must_fix", []),
+                "format_validated": format_validated,  # v2.5
             }
             # REJECT 시에도 draft 반환 (Council에서 검토용)
             return f"""⚠️ **AUDITOR REJECT**
@@ -567,10 +658,17 @@ def dual_engine_write_audit_rewrite(
         rewrite_messages = messages.copy()
         rewrite_messages.append({"role": "user", "content": rewrite_prompt})
 
-        draft, writer_name = _call_model_or_cli(writer_key, rewrite_messages, system_prompt, writer_profile)
+        # v2.5 Format Gate 적용
+        draft, writer_name, format_validated = _call_with_contract(
+            writer_key, rewrite_messages, system_prompt, writer_profile, role
+        )
 
         if "[Error]" in draft or "[CLI Error]" in draft:
             return draft, {"dual": True, "error": "rewrite_failed", "version": "v3"}
+
+        # v2.5: Format Gate 경고 제거
+        if "[FORMAT_WARNING]" in draft:
+            draft = draft.replace("[FORMAT_WARNING] ", "")
 
     # max_rewrite 소진 시 마지막 draft 반환
     meta = {
@@ -583,6 +681,7 @@ def dual_engine_write_audit_rewrite(
         "rewrite_count": rewrite_count,
         "audit_history": audit_history,
         "requires_council": True,  # max_rewrite 소진 시 Council 권장
+        "format_validated": format_validated,  # v2.5
     }
     return draft, meta
 
@@ -618,6 +717,81 @@ def _call_model_or_cli(model_key: str, messages: list, system_prompt: str, profi
     else:
         model = MODELS.get(model_key, MODELS.get("gpt_5_mini"))
         return call_llm(model, messages, system_prompt), model.name
+
+
+def _call_with_contract(
+    model_key: str,
+    messages: list,
+    system_prompt: str,
+    profile: str,
+    agent_role: str,
+    max_retry: int = 3
+) -> Tuple[str, str, bool]:
+    """
+    v2.5 Format Gate: LLM 호출 + Output Contract 검증
+
+    Args:
+        model_key: 모델 키
+        messages: 메시지 리스트
+        system_prompt: 시스템 프롬프트
+        profile: CLI 프로필
+        agent_role: 에이전트 역할 (coder, qa, reviewer 등)
+        max_retry: 최대 재시도 횟수
+
+    Returns:
+        (응답, 모델명, 검증성공여부)
+    """
+    contract = get_contract(agent_role)
+
+    # Contract가 없는 역할은 기존 방식으로 처리
+    if not contract:
+        response, model_name = _call_model_or_cli(model_key, messages, system_prompt, profile)
+        return response, model_name, True
+
+    # Schema 프롬프트를 시스템 프롬프트에 주입
+    schema_prompt = get_schema_prompt(agent_role)
+    enhanced_prompt = f"{system_prompt}\n\n{schema_prompt}"
+
+    last_error = None
+
+    for attempt in range(max_retry):
+        response, model_name = _call_model_or_cli(model_key, messages, enhanced_prompt, profile)
+
+        # 에러 응답은 검증 스킵
+        if "[Error]" in response or "[CLI Error]" in response:
+            return response, model_name, False
+
+        # Output Contract 검증
+        success, validated, error = validate_output(response, agent_role)
+
+        if success:
+            print(f"[FormatGate] {agent_role} 검증 성공 (attempt {attempt + 1})")
+            # Pydantic 모델을 JSON 문자열로 반환
+            if hasattr(validated, 'model_dump_json'):
+                return validated.model_dump_json(indent=2), model_name, True
+            return response, model_name, True
+
+        # 검증 실패 시 에러 메시지로 재시도
+        last_error = error
+        print(f"[FormatGate] {agent_role} 검증 실패 ({attempt + 1}/{max_retry}): {error[:100]}")
+
+        if attempt < max_retry - 1:
+            # 에러 피드백을 포함한 재시도 메시지
+            retry_prompt = f"""이전 응답이 형식 오류로 거부되었습니다.
+
+**오류 내용:**
+{error}
+
+**올바른 형식으로 다시 응답해주세요.**
+
+{schema_prompt}"""
+            messages = messages.copy()
+            messages.append({"role": "assistant", "content": response})
+            messages.append({"role": "user", "content": retry_prompt})
+
+    # 최대 재시도 초과 - 원본 응답 반환 + 경고
+    print(f"[FormatGate] {agent_role} 최대 재시도 초과, 원본 응답 사용")
+    return f"[FORMAT_WARNING] {response}", model_name, False
 
 
 def call_dual_engine_v2(
@@ -719,108 +893,7 @@ def call_dual_engine_v2(
     return merged_response, meta
 
 
-def call_vip_dual_engine(
-    prefix: str,
-    messages: list,
-    system_prompt: str
-) -> Tuple[str, Dict[str, Any]]:
-    """
-    VIP 듀얼 엔진: CEO 프리픽스 기반 VIP Writer + Auditor 패턴
-    v2.4: Claude CLI 지원 추가
-
-    - 최고/ : Claude CLI 듀얼 크로스체크
-    - 생각/ : GPT-5.2 Thinking + Claude CLI 크로스체크
-    - 검색/ : Perplexity + GPT-5 mini 팩트체크
-
-    Returns:
-        (최종 응답, 메타데이터)
-    """
-    if prefix not in VIP_DUAL_ENGINE:
-        # VIP 프리픽스가 아니면 CLI로 폴백
-        from src.services.cli_supervisor import CLISupervisor
-        cli = CLISupervisor()
-        result = cli.call_cli(messages[-1]["content"], system_prompt, "reviewer")
-        return (result.output if result.success else f"[Error] {result.error}"), {"dual": False, "vip": False}
-
-    config = VIP_DUAL_ENGINE[prefix]
-    writer_key = config["writer"]
-    auditor_key = config["auditor"]
-    writer_profile = config.get("writer_profile", "reviewer")
-    auditor_profile = config.get("auditor_profile", "reviewer")
-
-    # 1단계: VIP Writer 작업
-    print(f"[VIP-Dual] VIP Writer ({writer_key}) 작업 중...")
-    writer_response, writer_name = _call_model_or_cli(writer_key, messages, system_prompt, writer_profile)
-
-    if "[Error]" in writer_response or "[CLI Error]" in writer_response:
-        return writer_response, {"dual": True, "vip": True, "error": "writer_failed"}
-
-    # 2단계: VIP Auditor 크로스체크 - v2.4.2 강화된 프롬프트
-    auditor_prompt = f"""당신은 VIP 레벨의 Auditor(감사관)입니다.
-
-## 절대 규칙 (위반 시 즉시 무효)
-1. **수정 금지**: "내가 고쳐줄게요" 절대 금지. 오직 판정만.
-2. **인용 필수**: 모든 지적은 구체적 증거(파일/라인/데이터/로직)로 뒷받침.
-3. **Lazy Approval**: must_fix는 Severity HIGH만 허용:
-   - CEO 의사결정에 치명적 영향
-   - 논리적 오류/데이터 왜곡
-   - 리스크 누락 (보안/비용/규정)
-4. **스타일/표현 방식** = nice_to_fix로만 (반려 사유 불가)
-
-=== VIP WRITER 결과물 ===
-{writer_response}
-=========================
-
-**반드시 아래 JSON 형식으로만 응답 (코드블록 없이):**
-
-{{
-  "verdict": "APPROVE | REVISE | REJECT",
-  "must_fix": [{{"severity": "HIGH", "issue": "문제", "evidence": "구체적 근거", "fix_hint": "방향"}}],
-  "nice_to_fix": ["권장사항 (반려 사유 아님)"],
-  "key_findings": ["핵심 발견 1", "핵심 발견 2"],
-  "evidence": ["검증에 사용한 근거 목록"],
-  "risk_level": "LOW | MEDIUM | HIGH | CRITICAL",
-  "requires_council": false,
-  "confidence": 85,
-  "final_assessment": "CEO 의사결정 관점 최종 평가 (2문장)"
-}}
-"""
-
-    auditor_messages = messages.copy()
-    auditor_messages.append({"role": "assistant", "content": writer_response})
-    auditor_messages.append({"role": "user", "content": auditor_prompt})
-
-    print(f"[VIP-Dual] VIP Auditor ({auditor_key}) 크로스체크 중...")
-    auditor_response, auditor_name = _call_model_or_cli(auditor_key, auditor_messages, system_prompt, auditor_profile)
-
-    # 결과 병합
-    merged_response = f"""## 📝 VIP Writer ({writer_name})
-{writer_response}
-
----
-
-## 🔍 VIP Auditor ({auditor_name})
-{auditor_response}
-
----
-✅ **VIP 듀얼 엔진 검토 완료** ({config['description']})
-"""
-
-    # 메타데이터
-    meta = {
-        "dual": True,
-        "vip": True,
-        "prefix": prefix,
-        "writer_model": writer_name,
-        "auditor_model": auditor_name,
-        "description": config["description"],
-    }
-
-    # 로그
-    stream = get_stream()
-    stream.log_dual_engine(f"VIP-{prefix}", messages[-1]["content"], writer_response, auditor_response, merged_response)
-
-    return merged_response, meta
+# call_vip_dual_engine 삭제됨 (v2.4.4 - CEO 프리픽스 기능 제거)
 
 
 # =============================================================================
@@ -863,10 +936,13 @@ async def call_council_llm(
 
 def init_council_with_llm():
     """위원회에 CLI Caller 주입 (v2.3.2: API → CLI 전환)"""
-    from src.infra.council import get_council
+    from src.infra.council import get_council, reset_council
     from src.services.cli_supervisor import CLISupervisor
 
+    # 항상 싱글톤 리셋 후 새로 생성 (llm_caller 확실히 설정)
+    reset_council()
     council = get_council()
+
     cli_supervisor = CLISupervisor()
 
     async def council_cli_caller(
@@ -881,8 +957,8 @@ def init_council_with_llm():
 
         # 동기 CLI 호출을 비동기로 래핑
         def sync_cli_call():
-            # CLI 프로필 결정 (위원회는 reviewer 프로필 사용 - 읽기 전용)
-            profile = "reviewer"
+            # CLI 프로필 결정 (v2.4.2: 위원회는 council 프로필 사용)
+            profile = "council"
 
             # CLI 호출
             result = cli_supervisor.call_cli(
@@ -893,7 +969,8 @@ def init_council_with_llm():
             )
 
             if result.success:
-                return result.output
+                # v2.4.2: None 체크 추가
+                return result.output or "[CLI ERROR] 빈 출력"
             else:
                 # CLI 실패 시 에러 메시지 반환
                 error_msg = result.error or result.abort_reason or "CLI 호출 실패"
@@ -1221,45 +1298,6 @@ def check_loop(stage: str, response: str) -> Tuple[bool, Optional[str]]:
 # Agent Call
 # =============================================================================
 
-def strip_ceo_prefix(message: str) -> tuple[str, str]:
-    """
-    CEO 프리픽스 제거 및 실제 메시지 추출
-    [PROJECT: xxx] 래퍼가 있어도 올바르게 처리
-
-    Returns:
-        (실제 메시지, 사용된 프리픽스 or None)
-
-    예시:
-        "최고/ 코드 리뷰해줘" → ("코드 리뷰해줘", "최고/")
-        "[PROJECT: test]\n최고/ 리뷰해줘" → ("[PROJECT: test]\n리뷰해줘", "최고/")
-        "생각/ 왜 안될까?" → ("왜 안될까?", "생각/")
-        "검색/ 최신 버전" → ("최신 버전", "검색/")
-        "일반 메시지" → ("일반 메시지", None)
-    """
-    prefixes = ["최고/", "생각/", "검색/"]
-
-    # Case 1: 직접 프리픽스로 시작하는 경우
-    for prefix in prefixes:
-        if message.startswith(prefix):
-            actual_message = message[len(prefix):].lstrip()
-            return actual_message, prefix
-
-    # Case 2: [PROJECT: xxx]\n 래퍼가 있는 경우
-    if message.startswith("[PROJECT:"):
-        lines = message.split("\n", 1)
-        if len(lines) > 1:
-            project_line = lines[0]  # "[PROJECT: xxx]"
-            content_line = lines[1]   # "최고/ 실제 메시지"
-
-            for prefix in prefixes:
-                if content_line.startswith(prefix):
-                    # 프리픽스 제거 후 [PROJECT:] 유지
-                    actual_content = content_line[len(prefix):].lstrip()
-                    return f"{project_line}\n{actual_content}", prefix
-
-    return message, None
-
-
 def extract_project_from_message(message: str) -> tuple[str, str]:
     """
     [PROJECT: xxx] 태그에서 프로젝트명 추출
@@ -1298,10 +1336,9 @@ def call_agent(
     - CEO는 PM만 호출 가능. 하위 에이전트(coder/qa/strategist 등)는 PM이 호출.
     - _internal_call=True면 PM이 하위 에이전트를 호출하는 것이므로 허용.
 
-    CEO 프리픽스 지원:
-    - 최고/ : VIP-AUDIT (Opus 4.5) 강제
-    - 생각/ : VIP-THINKING (GPT-5.2 Thinking Extend) 강제
-    - 검색/ : RESEARCH (Perplexity) 강제
+    v2.4.4 변경:
+    - CEO 프리픽스 기능 제거 (최고/, 생각/, 검색/)
+    - PM은 Opus 4.5로 고정 (SAFETY 티어)
 
     Args:
         return_meta: True이면 (response, meta_dict) 튜플 반환
@@ -1350,11 +1387,8 @@ CEO는 하위 에이전트(`{agent_role}`)를 직접 호출할 수 없습니다.
     if current_project:
         print(f"[Project] Detected: {current_project}")
 
-    # CEO 프리픽스 체크 (라우팅용 원본 유지)
-    actual_message, used_prefix = strip_ceo_prefix(message)
-
     router = get_router()
-    routing = route_message(message, agent_role)  # 프리픽스 포함된 원본으로 라우팅
+    routing = route_message(message, agent_role)
 
     # 모델 메타 정보 수집
     model_meta = {
@@ -1363,12 +1397,7 @@ CEO는 하위 에이전트(`{agent_role}`)를 직접 호출할 수 없습니다.
         'tier': routing.model_tier,
         'reason': routing.reason,
         'provider': routing.model_spec.provider,
-        'ceo_prefix': used_prefix,
     }
-
-    # 프리픽스 사용 시 로그 표시
-    if used_prefix:
-        print(f"[CEO Prefix] '{used_prefix}' detected → VIP mode activated")
 
     print(f"[Router] {agent_role} → {routing.model_tier.upper()} ({routing.model_spec.name})")
     print(f"[Router] Reason: {routing.reason}")
@@ -1377,11 +1406,11 @@ CEO는 하위 에이전트(`{agent_role}`)를 직접 호출할 수 없습니다.
     if not system_prompt:
         return f"[Error] Unknown agent role: {agent_role}"
 
-    # 프리픽스 제거된 실제 메시지 사용
-    agent_message = actual_message
-    if use_translation and rag.is_korean(actual_message):
-        agent_message = rag.translate_for_agent(actual_message)
-        print(f"[Translate] CEO→Agent: {len(actual_message)}자 → {len(agent_message)}자")
+    # 메시지 처리
+    agent_message = message
+    if use_translation and rag.is_korean(message):
+        agent_message = rag.translate_for_agent(message)
+        print(f"[Translate] CEO→Agent: {len(message)}자 → {len(agent_message)}자")
 
     if agent_role == "pm":
         try:
@@ -1397,6 +1426,28 @@ CEO는 하위 에이전트(`{agent_role}`)를 직접 호출할 수 없습니다.
                 print(f"[RAG] Context injected ({current_project or 'all'}): {len(rag_context)} chars")
         except Exception as e:
             print(f"[RAG] Context injection failed: {e}")
+
+    # =========================================================================
+    # v2.4.1: Analyst 파일 컨텍스트 주입 (Gemini는 파일시스템 접근 불가)
+    # =========================================================================
+    if agent_role == "analyst" and current_project:
+        try:
+            project_context = collect_project_context(current_project)
+            if project_context and not project_context.startswith("[ERROR]"):
+                agent_message = f"""## 프로젝트 파일 컨텍스트 (자동 수집)
+
+{project_context}
+
+---
+
+## 분석 요청
+
+{agent_message}"""
+                print(f"[Analyst] 프로젝트 컨텍스트 주입: {len(project_context)} chars")
+            else:
+                print(f"[Analyst] 프로젝트 컨텍스트 수집 실패: {project_context}")
+        except Exception as e:
+            print(f"[Analyst] 컨텍스트 주입 실패: {e}")
 
     messages = []
     if current_session_id:
@@ -1414,75 +1465,24 @@ CEO는 하위 에이전트(`{agent_role}`)를 직접 호출할 수 없습니다.
     dual_meta = {"dual": False}
     council_result = None
 
-    # 디버그: VIP 조건 체크 (flush=True로 즉시 출력, stderr로도 출력)
-    import sys
-    debug_msg = f"[DEBUG-VIP] use_dual_engine={use_dual_engine}, used_prefix='{used_prefix}', prefix_in_dict={used_prefix in VIP_DUAL_ENGINE if used_prefix else 'N/A'}"
-    print(debug_msg, flush=True)
-    sys.stderr.write(debug_msg + "\n")
-    sys.stderr.flush()
-
-    debug_msg2 = f"[DEBUG-VIP] VIP_DUAL_ENGINE keys: {list(VIP_DUAL_ENGINE.keys())}"
-    print(debug_msg2, flush=True)
-    sys.stderr.write(debug_msg2 + "\n")
-    sys.stderr.flush()
-
-    # =========================================================================
-    # VIP 듀얼 엔진 모드 (CEO 프리픽스 사용 시)
-    # =========================================================================
-    if use_dual_engine and used_prefix and used_prefix in VIP_DUAL_ENGINE:
-        print(f"[VIP-Dual] {used_prefix} VIP 듀얼 엔진 모드 활성화")
-        response, dual_meta = call_vip_dual_engine(used_prefix, messages, system_prompt)
-
-        # VIP 모드에서도 위원회 자동 소집 체크
-        if auto_council:
-            council_type = should_convene_council(agent_role, response, dual_meta=dual_meta)
-            if council_type:
-                # v2.3.3: trigger_source 결정
-                trigger_source = _determine_trigger_source(dual_meta)
-                print(f"[Council] VIP 자동 소집 트리거: {council_type} (source: {trigger_source})")
-                try:
-                    council_result = convene_council_sync(
-                        council_type, response, agent_message,
-                        trigger_source=trigger_source,
-                        original_verdict_json=dual_meta.get("audit_history", [{}])[-1] if dual_meta.get("audit_history") else None
-                    )
-                    model_meta['council'] = council_result
-
-                    # 위원회 결과를 응답에 추가
-                    response += f"""
-
----
-
-## 🏛️ {council_type.upper()} 위원회 판정
-
-{council_result['summary']}
-
-**상세 점수:**
-"""
-                    for judge in council_result['judges']:
-                        response += f"- {judge['icon']} {judge['persona']}: {judge['score']}/10 - {judge['reasoning'][:100]}...\n"
-
-                except Exception as e:
-                    print(f"[Council] 소집 실패: {e}")
-
-        stream = get_stream()
-        stream.log("ceo", agent_role, "request", agent_message)
-        stream.log(agent_role, "ceo", "response", response)
-
     # =========================================================================
     # 듀얼 엔진 V3 사용 (Write → Audit → Rewrite 패턴)
     # =========================================================================
-    elif use_dual_engine and agent_role in DUAL_ENGINE_ROLES and not used_prefix:
+    if use_dual_engine and agent_role in DUAL_ENGINE_ROLES:
         print(f"[Dual-V3] {agent_role} Write-Audit-Rewrite 패턴 활성화")
         response, dual_meta = dual_engine_write_audit_rewrite(agent_role, messages, system_prompt)
 
-        # 위원회 자동 소집 체크 (dual_meta 전달)
+        # 위원회 자동 소집 체크 (dual_meta 전달) + FAIL 시 재수정 루프
+        MAX_COUNCIL_RETRY = 2  # 위원회 재수정 최대 횟수
+        council_retry = 0
+
         if auto_council:
             council_type = should_convene_council(agent_role, response, dual_meta=dual_meta)
-            if council_type:
+
+            while council_type and council_retry < MAX_COUNCIL_RETRY:
                 # v2.3.3: trigger_source 결정
                 trigger_source = _determine_trigger_source(dual_meta)
-                print(f"[Council] 자동 소집 트리거: {council_type} (source: {trigger_source})")
+                print(f"[Council] 자동 소집 트리거: {council_type} (source: {trigger_source}, retry: {council_retry})")
                 try:
                     council_result = convene_council_sync(
                         council_type, response, agent_message,
@@ -1491,7 +1491,31 @@ CEO는 하위 에이전트(`{agent_role}`)를 직접 호출할 수 없습니다.
                     )
                     model_meta['council'] = council_result
 
-                    # 위원회 결과를 응답에 추가
+                    # v2.4: FAIL이면 재수정 요청
+                    if council_result['verdict'] == 'fail' and council_retry < MAX_COUNCIL_RETRY - 1:
+                        council_retry += 1
+                        print(f"[Council] FAIL - 재수정 요청 ({council_retry}/{MAX_COUNCIL_RETRY})")
+
+                        # 위원회 피드백으로 재수정 요청
+                        concerns = [j.get('reasoning', '')[:200] for j in council_result['judges'] if j.get('score', 10) < 7]
+                        feedback = "\n".join(concerns[:3]) if concerns else council_result['summary']
+
+                        rewrite_prompt = f"""위원회에서 다음 문제를 지적했습니다:
+
+{feedback}
+
+위 피드백을 반영하여 응답을 수정해주세요."""
+
+                        rewrite_messages = messages.copy()
+                        rewrite_messages.append({"role": "assistant", "content": response})
+                        rewrite_messages.append({"role": "user", "content": rewrite_prompt})
+
+                        # 재수정 호출
+                        response, dual_meta = dual_engine_write_audit_rewrite(agent_role, rewrite_messages, system_prompt)
+                        council_type = should_convene_council(agent_role, response, dual_meta=dual_meta)
+                        continue
+
+                    # PASS 또는 최대 재시도 도달 - 결과 추가하고 종료
                     response += f"""
 
 ---
@@ -1504,9 +1528,11 @@ CEO는 하위 에이전트(`{agent_role}`)를 직접 호출할 수 없습니다.
 """
                     for judge in council_result['judges']:
                         response += f"- {judge['icon']} {judge['persona']}: {judge['score']}/10 - {judge['reasoning'][:100]}...\n"
+                    break
 
                 except Exception as e:
                     print(f"[Council] 소집 실패: {e}")
+                    break
 
         stream = get_stream()
         stream.log("ceo", agent_role, "request", agent_message)
@@ -1649,6 +1675,28 @@ CEO는 하위 에이전트(`{agent_role}`)를 직접 호출할 수 없습니다.
         model_meta['latency_ms'] = elapsed_ms
     except Exception as e:
         print(f"[Scorecard] Error: {e}")
+
+    # =========================================================================
+    # v2.5: Output Contract 검증 (형식 게이트)
+    # - CONTRACT_EXEMPT_AGENTS: Perplexity, Gemini 등 JSON 강제 불가 에이전트 제외
+    # - ENFORCE_OUTPUT_CONTRACT: True면 Fail Fast, False면 Soft Landing
+    # =========================================================================
+    if agent_role in CONTRACT_REGISTRY and agent_role not in CONTRACT_EXEMPT_AGENTS:
+        success, validated_or_raw, error_msg = validate_output(response, agent_role)
+        if success:
+            print(f"[FormatGate] ✅ {agent_role} 출력 검증 통과")
+            model_meta['format_validated'] = True
+            model_meta['validated_output'] = validated_or_raw.model_dump() if hasattr(validated_or_raw, 'model_dump') else None
+        else:
+            print(f"[FormatGate] ❌ {agent_role} 형식 오류: {error_msg[:100]}")
+            model_meta['format_validated'] = False
+            model_meta['format_error'] = error_msg
+
+            # Fail Fast 모드: 환경변수 ENFORCE_OUTPUT_CONTRACT=true 시 예외 발생
+            if ENFORCE_OUTPUT_CONTRACT:
+                raise FormatGateError(
+                    f"[{agent_role}] Output Contract 위반: {error_msg[:200]}"
+                )
 
     if return_meta:
         return response, model_meta

@@ -817,26 +817,50 @@ def chat_stream():
 
 @chat_bp.route('/chat/abort', methods=['POST'])
 def abort_stream():
-    """스트리밍 중단 API"""
+    """스트리밍 중단 API (v2.4.3: CLI 프로세스 강제 종료 추가)"""
     data = request.json
     stream_id = data.get('stream_id')
+    session_id = data.get('session_id')
+    kill_cli = data.get('kill_cli', True)
 
     if not stream_id:
         return jsonify({'error': 'stream_id required'}), 400
 
+    result = {'stream_id': stream_id, 'stream_aborted': False, 'cli_killed': None}
+
     if stream_id in active_streams:
         active_streams[stream_id] = False
-        return jsonify({
-            'status': 'aborted',
-            'stream_id': stream_id,
-            'message': '스트림 중단 요청됨'
-        })
+        result['stream_aborted'] = True
+
+    if kill_cli and session_id:
+        try:
+            from src.services.cli_supervisor import kill_session
+            cli_result = kill_session(session_id)
+            result['cli_killed'] = cli_result
+            print(f"[Abort] CLI 종료: {cli_result}")
+        except Exception as e:
+            result['cli_error'] = str(e)
+
+    if result['stream_aborted'] or result.get('cli_killed', {}).get('killed'):
+        result['status'] = 'aborted'
+        result['message'] = '중단 완료'
+        return jsonify(result)
     else:
-        return jsonify({
-            'status': 'not_found',
-            'stream_id': stream_id,
-            'message': '스트림을 찾을 수 없음 (이미 종료되었거나 존재하지 않음)'
-        }), 404
+        result['status'] = 'not_found'
+        result['message'] = '스트림/CLI 없음'
+        return jsonify(result), 404
+
+
+@chat_bp.route('/chat/kill-all', methods=['POST'])
+@login_required
+def kill_all_cli():
+    """모든 CLI 프로세스 강제 종료 (v2.4.3 긴급용)"""
+    try:
+        from src.services.cli_supervisor import kill_all_cli_processes
+        result = kill_all_cli_processes()
+        return jsonify({'status': 'success', **result})
+    except Exception as e:
+        return jsonify({'status': 'error', 'error': str(e)}), 500
 
 
 @chat_bp.route('/chat/background', methods=['POST'])

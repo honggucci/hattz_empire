@@ -1,7 +1,8 @@
 """
-Hattz Empire - Council API (v2.3.1)
+Hattz Empire - Council API (v2.3.2)
 Persona Council 위원회 API
 
+v2.3.2: init_council_with_llm() 호출로 실제 LLM 연결
 v2.3.1: 위원회 판정을 DB에 저장하고 임베딩
 - session_id, project 파라미터로 저장 컨텍스트 설정
 - 모든 페르소나 판정 + 최종 verdict가 DB에 기록됨
@@ -10,6 +11,7 @@ from flask import request, jsonify
 
 from . import council_bp
 from src.infra.council import get_council, COUNCIL_TYPES, PERSONAS
+from src.core.llm_caller import init_council_with_llm
 
 
 @council_bp.route('/types', methods=['GET'])
@@ -68,8 +70,10 @@ def convene():
     if council_type not in COUNCIL_TYPES:
         return jsonify({'error': f'Unknown council type: {council_type}'}), 400
 
-    # v2.3.1: session_id 전달 시 DB에 저장됨
+    # v2.3.2: init_council_with_llm()로 실제 LLM 연결
     council = get_council(session_id=session_id, project=project)
+    if council.llm_caller is None:
+        init_council_with_llm()  # 실제 LLM 호출 함수 설정
     verdict = council.convene_sync(council_type, content, context)
 
     return jsonify({

@@ -2,6 +2,11 @@
 Hattz Empire - Claude Code CLI Supervisor
 Claude Code CLI 호출 + 세션 관리 + 에러 복구
 
+v2.4.1: Queue 기반 CLI 통제 추가
+- CLIQueue: 최대 동시 실행 제한 (기본 2개)
+- RateLimiter: 분당 호출 제한 (기본 10회)
+- 대기 큐 상태 조회 API
+
 v2.1.1 EXEC tier:
 - 타임아웃 감지 (기본 5분)
 - 컨텍스트 초과 감지 + 자동 요약 재시도
@@ -15,8 +20,10 @@ import re
 import json
 import time
 import uuid
-from typing import Optional, Dict, Any, List, Tuple
-from dataclasses import dataclass
+import threading
+from queue import Queue, Empty
+from typing import Optional, Dict, Any, List, Tuple, Callable
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -29,6 +36,11 @@ CLI_CONFIG = {
     "max_retries": 2,            # 최대 재시도 횟수
     "context_recovery_limit": 10, # 복구 시 가져올 최근 메시지 수
     "output_max_chars": 50000,   # 출력 최대 길이
+    # v2.4.1: Queue 기반 통제
+    "max_concurrent": 2,         # 최대 동시 CLI 실행 수
+    "queue_max_size": 10,        # 대기 큐 최대 크기
+    "rate_limit_calls": 10,      # 분당 최대 호출 수
+    "rate_limit_period": 60,     # Rate limit 기간 (초)
 }
 
 # Claude CLI 실행 경로 (Windows PATH 문제 우회)
@@ -69,14 +81,16 @@ def _get_claude_cli_path() -> str:
 
 CLAUDE_CLI_PATH = _get_claude_cli_path()
 
-# v2.4: 프로필별 모델 설정 (API 비용 0원 - CLI만 사용)
-# coder/excavator = Opus (고품질 코드/분석)
-# reviewer/qa = Sonnet (빠른 검증)
+# v2.4.2: 프로필별 모델 설정 (API 비용 0원 - CLI만 사용)
+# PM/coder/excavator = Opus (고품질 라우팅/코드/분석)
+# reviewer/qa/council = Sonnet (빠른 검증)
 CLI_PROFILE_MODELS = {
+    "pm": "claude-opus-4-5-20251101",         # PM 라우팅 = Opus (v2.4.2)
     "coder": "claude-opus-4-5-20251101",      # 코드 작성 = Opus
     "excavator": "claude-opus-4-5-20251101",  # 의도 발굴 = Opus
     "qa": "claude-sonnet-4-5-20250514",       # QA 검증 = Sonnet 4.5
     "reviewer": "claude-sonnet-4-5-20250514", # 리뷰/검토 = Sonnet 4.5
+    "council": "claude-sonnet-4-5-20250514",  # 위원회 = Sonnet 4.5 (v2.4.2)
     "default": "claude-sonnet-4-5-20250514",  # 기본값 = Sonnet 4.5
 }
 
@@ -103,6 +117,13 @@ FATAL_ERROR_PATTERNS = [
     r"quota.*exceeded",
 ]
 
+# 세션 충돌 에러 패턴 (세션 리셋 후 재시도)
+SESSION_CONFLICT_PATTERNS = [
+    r"Session ID .* is already in use",
+    r"session.*already.*use",
+    r"session.*conflict",
+]
+
 
 @dataclass
 class CLIResult:
@@ -115,6 +136,422 @@ class CLIResult:
     context_recovered: bool = False
     aborted: bool = False
     abort_reason: Optional[str] = None
+    queue_wait_time: float = 0.0  # 큐 대기 시간 (초)
+    # v2.5: JSON 검증 관련
+    parsed_json: Optional[dict] = None  # 파싱된 JSON (검증 통과 시)
+    format_warning: Optional[str] = None  # JSON 검증 실패 경고
+
+
+@dataclass
+class CLITask:
+    """큐에 넣을 CLI 태스크"""
+    task_id: str
+    prompt: str
+    profile: str
+    system_prompt: str = ""
+    session_id: Optional[str] = None
+    task_context: str = ""
+    callback: Optional[Callable[[CLIResult], None]] = None
+    created_at: float = field(default_factory=time.time)
+
+
+# =============================================================================
+# Rate Limiter
+# =============================================================================
+
+class RateLimiter:
+    """분당 호출 제한"""
+
+    def __init__(self, max_calls: int = 10, period: int = 60):
+        self.max_calls = max_calls
+        self.period = period
+        self.calls: List[float] = []
+        self._lock = threading.Lock()
+
+    def can_call(self) -> bool:
+        """호출 가능 여부 (True면 호출 가능)"""
+        with self._lock:
+            now = time.time()
+            # 기간 내 호출 기록만 유지
+            self.calls = [t for t in self.calls if now - t < self.period]
+
+            if len(self.calls) < self.max_calls:
+                self.calls.append(now)
+                return True
+            return False
+
+    def wait_time(self) -> float:
+        """다음 호출까지 대기 시간 (초)"""
+        with self._lock:
+            if len(self.calls) < self.max_calls:
+                return 0.0
+            oldest = min(self.calls)
+            return max(0.0, self.period - (time.time() - oldest))
+
+    def get_status(self) -> Dict[str, Any]:
+        """상태 조회"""
+        with self._lock:
+            now = time.time()
+            active_calls = [t for t in self.calls if now - t < self.period]
+            return {
+                "calls_in_period": len(active_calls),
+                "max_calls": self.max_calls,
+                "period_seconds": self.period,
+                "available": self.max_calls - len(active_calls),
+            }
+
+
+# =============================================================================
+# CLI Queue (동시 실행 제한)
+# =============================================================================
+
+class CLIQueue:
+    """
+    CLI 실행 큐
+
+    - 최대 동시 실행 제한 (Semaphore)
+    - 대기 큐 (Queue)
+    - 워커 스레드가 순차 처리
+    """
+
+    def __init__(
+        self,
+        max_concurrent: int = 2,
+        max_queue_size: int = 10,
+        rate_limiter: Optional[RateLimiter] = None
+    ):
+        self.max_concurrent = max_concurrent
+        self.semaphore = threading.Semaphore(max_concurrent)
+        self.queue: Queue[CLITask] = Queue(maxsize=max_queue_size)
+        self.rate_limiter = rate_limiter or RateLimiter()
+
+        self._active_count = 0
+        self._total_processed = 0
+        self._lock = threading.Lock()
+        self._running = True
+
+        # 결과 저장소 (task_id -> CLIResult)
+        self._results: Dict[str, CLIResult] = {}
+        self._result_events: Dict[str, threading.Event] = {}
+
+        # 워커 스레드 시작
+        self._worker_thread = threading.Thread(target=self._worker, daemon=True)
+        self._worker_thread.start()
+        print(f"[CLIQueue] 시작 (max_concurrent={max_concurrent}, max_queue={max_queue_size})")
+
+    def submit(self, task: CLITask, timeout: float = None) -> CLIResult:
+        """
+        태스크 제출 (동기 - 결과 대기)
+
+        Args:
+            task: CLI 태스크
+            timeout: 최대 대기 시간 (초)
+
+        Returns:
+            CLIResult
+        """
+        # 결과 이벤트 생성
+        event = threading.Event()
+        self._result_events[task.task_id] = event
+
+        try:
+            # 큐에 추가 (큐가 꽉 차면 대기)
+            self.queue.put(task, timeout=timeout or 60)
+            print(f"[CLIQueue] 태스크 추가: {task.task_id} (profile={task.profile}, 대기={self.queue.qsize()})")
+        except Exception as e:
+            return CLIResult(
+                success=False,
+                output="",
+                error=f"큐 추가 실패: {e}",
+                aborted=True,
+                abort_reason="QUEUE_FULL"
+            )
+
+        # 결과 대기
+        wait_timeout = timeout or (CLI_CONFIG["timeout_seconds"] + 60)
+        if event.wait(timeout=wait_timeout):
+            result = self._results.pop(task.task_id, None)
+            if result:
+                return result
+
+        return CLIResult(
+            success=False,
+            output="",
+            error="결과 대기 타임아웃",
+            aborted=True,
+            abort_reason="RESULT_TIMEOUT"
+        )
+
+    def submit_async(self, task: CLITask) -> str:
+        """
+        태스크 비동기 제출 (결과 대기 안 함)
+
+        Returns:
+            task_id (나중에 get_result로 조회)
+        """
+        event = threading.Event()
+        self._result_events[task.task_id] = event
+
+        try:
+            self.queue.put_nowait(task)
+            print(f"[CLIQueue] 비동기 태스크 추가: {task.task_id}")
+            return task.task_id
+        except Exception as e:
+            print(f"[CLIQueue] 큐 꽉 참: {e}")
+            return ""
+
+    def get_result(self, task_id: str, timeout: float = None) -> Optional[CLIResult]:
+        """비동기 태스크 결과 조회"""
+        event = self._result_events.get(task_id)
+        if not event:
+            return None
+
+        if event.wait(timeout=timeout):
+            return self._results.pop(task_id, None)
+        return None
+
+    def _worker(self):
+        """워커 스레드 - 큐에서 태스크 꺼내서 처리"""
+        while self._running:
+            try:
+                task = self.queue.get(timeout=1)
+            except Empty:
+                continue
+
+            # Rate limit 체크
+            while not self.rate_limiter.can_call():
+                wait = self.rate_limiter.wait_time()
+                print(f"[CLIQueue] Rate limit 대기: {wait:.1f}초")
+                time.sleep(min(wait, 5))
+
+            # Semaphore 획득 (동시 실행 제한)
+            self.semaphore.acquire()
+
+            with self._lock:
+                self._active_count += 1
+
+            queue_wait_time = time.time() - task.created_at
+
+            try:
+                print(f"[CLIQueue] 실행 시작: {task.task_id} (대기시간={queue_wait_time:.1f}초)")
+
+                # 실제 CLI 실행
+                result = self._execute_task(task)
+                result.queue_wait_time = queue_wait_time
+
+                # 결과 저장
+                self._results[task.task_id] = result
+
+                # 콜백 호출
+                if task.callback:
+                    try:
+                        task.callback(result)
+                    except Exception as e:
+                        print(f"[CLIQueue] 콜백 에러: {e}")
+
+                # 이벤트 시그널
+                event = self._result_events.get(task.task_id)
+                if event:
+                    event.set()
+
+                with self._lock:
+                    self._total_processed += 1
+
+            finally:
+                with self._lock:
+                    self._active_count -= 1
+                self.semaphore.release()
+                self.queue.task_done()
+
+    def _execute_task(self, task: CLITask) -> CLIResult:
+        """태스크 실행 (CLISupervisor 사용)"""
+        supervisor = CLISupervisor()
+        return supervisor.call_cli(
+            prompt=task.prompt,
+            system_prompt=task.system_prompt,
+            profile=task.profile,
+            session_id=task.session_id,
+            task_context=task.task_context
+        )
+
+    def get_status(self) -> Dict[str, Any]:
+        """큐 상태 조회"""
+        with self._lock:
+            return {
+                "queue_size": self.queue.qsize(),
+                "active_count": self._active_count,
+                "max_concurrent": self.max_concurrent,
+                "total_processed": self._total_processed,
+                "rate_limiter": self.rate_limiter.get_status(),
+            }
+
+    def shutdown(self):
+        """종료"""
+        self._running = False
+        self._worker_thread.join(timeout=5)
+        print("[CLIQueue] 종료됨")
+
+
+# 싱글톤 큐 인스턴스
+_cli_queue: Optional[CLIQueue] = None
+
+# v2.4.1: 활성 프로세스 추적 (좀비 방지)
+_active_processes: Dict[str, subprocess.Popen] = {}
+_process_lock = threading.Lock()
+
+
+def register_process(task_id: str, proc: subprocess.Popen):
+    """프로세스 등록"""
+    with _process_lock:
+        _active_processes[task_id] = proc
+
+
+def unregister_process(task_id: str):
+    """프로세스 해제"""
+    with _process_lock:
+        _active_processes.pop(task_id, None)
+
+
+def kill_zombie_processes(timeout_seconds: int = 600) -> List[str]:
+    """좀비 프로세스 강제 종료 (기본 10분 초과)"""
+    import psutil
+    killed = []
+
+    with _process_lock:
+        for task_id, proc in list(_active_processes.items()):
+            try:
+                # 프로세스 정보 조회
+                if proc.poll() is not None:
+                    # 이미 종료됨
+                    del _active_processes[task_id]
+                    continue
+
+                p = psutil.Process(proc.pid)
+                elapsed = time.time() - p.create_time()
+
+                if elapsed > timeout_seconds:
+                    print(f"[CLISupervisor] 좀비 프로세스 발견: {task_id} (PID={proc.pid}, {elapsed:.0f}초 경과)")
+                    proc.kill()
+                    proc.wait(timeout=5)
+                    del _active_processes[task_id]
+                    killed.append(task_id)
+            except Exception as e:
+                print(f"[CLISupervisor] 프로세스 정리 에러: {e}")
+
+    return killed
+
+
+def get_active_processes() -> Dict[str, Any]:
+    """활성 프로세스 상태 조회"""
+    import psutil
+    result = []
+
+    with _process_lock:
+        for task_id, proc in _active_processes.items():
+            try:
+                if proc.poll() is None:  # 아직 실행 중
+                    p = psutil.Process(proc.pid)
+                    result.append({
+                        "task_id": task_id,
+                        "pid": proc.pid,
+                        "elapsed": time.time() - p.create_time(),
+                        "memory_mb": p.memory_info().rss / 1024 / 1024,
+                    })
+            except:
+                pass
+
+    return {
+        "active_count": len(result),
+        "processes": result
+    }
+
+
+def kill_session(session_id: str) -> Dict[str, Any]:
+    """
+    특정 세션의 CLI 프로세스 강제 종료
+    v2.4.3: 중단 버튼용
+    """
+    killed_tasks = []
+
+    with _process_lock:
+        for task_id, proc in list(_active_processes.items()):
+            if session_id in task_id:
+                try:
+                    if proc.poll() is None:
+                        print(f"[CLI-Supervisor] 세션 강제 종료: {task_id} (PID={proc.pid})")
+                        proc.kill()
+                        proc.wait(timeout=3)
+                        killed_tasks.append(task_id)
+                    del _active_processes[task_id]
+                except Exception as e:
+                    print(f"[CLI-Supervisor] 프로세스 종료 에러: {e}")
+
+    global _session_registry, _committee_session_registry
+    keys_to_remove = [k for k in _session_registry if session_id in k]
+    for k in keys_to_remove:
+        del _session_registry[k]
+
+    committee_keys = [k for k in _committee_session_registry if session_id in k]
+    for k in committee_keys:
+        del _committee_session_registry[k]
+
+    return {
+        "killed": len(killed_tasks) > 0,
+        "task_ids": killed_tasks,
+        "session_entries_cleared": len(keys_to_remove) + len(committee_keys),
+        "message": f"{len(killed_tasks)}개 프로세스 종료됨" if killed_tasks else "활성 프로세스 없음"
+    }
+
+
+def kill_all_cli_processes() -> Dict[str, Any]:
+    """모든 CLI 프로세스 강제 종료 (v2.4.3 긴급 중단용)"""
+    killed_tasks = []
+
+    with _process_lock:
+        for task_id, proc in list(_active_processes.items()):
+            try:
+                if proc.poll() is None:
+                    print(f"[CLI-Supervisor] 전체 종료: {task_id} (PID={proc.pid})")
+                    proc.kill()
+                    proc.wait(timeout=3)
+                    killed_tasks.append(task_id)
+                del _active_processes[task_id]
+            except Exception as e:
+                print(f"[CLI-Supervisor] 프로세스 종료 에러: {e}")
+
+    reset_all_sessions()
+
+    return {
+        "killed_count": len(killed_tasks),
+        "task_ids": killed_tasks,
+        "message": f"전체 {len(killed_tasks)}개 프로세스 종료됨"
+    }
+
+
+def get_cli_queue() -> CLIQueue:
+    """CLI 큐 싱글톤"""
+    global _cli_queue
+    if _cli_queue is None:
+        _cli_queue = CLIQueue(
+            max_concurrent=CLI_CONFIG["max_concurrent"],
+            max_queue_size=CLI_CONFIG["queue_max_size"],
+            rate_limiter=RateLimiter(
+                max_calls=CLI_CONFIG["rate_limit_calls"],
+                period=CLI_CONFIG["rate_limit_period"]
+            )
+        )
+    return _cli_queue
+
+
+def reset_all_sessions():
+    """
+    모든 CLI 세션 초기화 (서버 재시작 시 호출)
+    v2.4.2: 세션 충돌 방지
+    """
+    global _session_registry, _committee_session_registry
+    _session_registry.clear()
+    _committee_session_registry.clear()
+    print("[CLI-Supervisor] 모든 세션 초기화 완료")
 
 
 # =============================================================================
@@ -171,7 +608,34 @@ class CLISupervisor:
 
                 # 성공
                 if result.success:
-                    return result
+                    # v2.5: JSON 출력 검증
+                    is_valid, error_msg, parsed = self._validate_json_output(result.output, profile)
+
+                    if is_valid:
+                        # 검증 통과 - 파싱된 JSON 메타데이터 추가
+                        result.parsed_json = parsed
+                        print(f"[CLI-Supervisor] JSON 검증 통과 (profile={profile})")
+                        return result
+                    else:
+                        # JSON 검증 실패 - 재시도
+                        if self.retry_count < self.config["max_retries"]:
+                            print(f"[CLI-Supervisor] JSON 검증 실패: {error_msg}, 재시도 ({self.retry_count + 1}/{self.config['max_retries']})")
+
+                            # 에러 피드백 포함하여 재시도
+                            retry_feedback = f"""이전 응답이 형식 오류로 거부되었습니다.
+
+오류: {error_msg}
+
+반드시 JSON만 출력하세요. 설명/인사 금지.
+JSON 외 출력 = 즉시 FAIL"""
+                            full_prompt = f"{full_prompt}\n\n[FORMAT_ERROR]\n{retry_feedback}\n[/FORMAT_ERROR]"
+                            self.retry_count += 1
+                            continue
+                        else:
+                            # 재시도 초과 - 원본 반환 + 경고
+                            print(f"[CLI-Supervisor] JSON 검증 실패 (재시도 초과): {error_msg}")
+                            result.format_warning = error_msg
+                            return result
 
                 # ABORT 감지
                 if self._is_abort(result.output):
@@ -196,6 +660,25 @@ class CLISupervisor:
                     full_prompt = summarized_prompt
                     self.retry_count += 1
                     continue
+
+                # 세션 충돌 에러 (v2.4.2: 자동 리셋 후 재시도)
+                if self._is_session_conflict(result.error or result.output or ""):
+                    if self.retry_count < self.config["max_retries"]:
+                        print(f"[CLI-Supervisor] 세션 충돌 감지! 세션 리셋 후 재시도 ({self.retry_count + 1}/{self.config['max_retries']})")
+                        # 세션 강제 리셋 (새 UUID 생성)
+                        self.reset_session(profile)
+                        self.retry_count += 1
+                        time.sleep(1)
+                        continue
+                    else:
+                        # 재시도 횟수 초과 - 세션 충돌 에러 반환
+                        return CLIResult(
+                            success=False,
+                            output="",
+                            error="세션 충돌 지속 (재시도 초과)",
+                            aborted=True,
+                            abort_reason="SESSION_CONFLICT_MAX_RETRIES"
+                        )
 
                 # 치명적 에러
                 if self._is_fatal_error(result.error or ""):
@@ -253,33 +736,55 @@ class CLISupervisor:
         )
 
     def _execute_cli(self, prompt: str, profile: str) -> CLIResult:
-        """실제 CLI 실행"""
+        """실제 CLI 실행 (Popen으로 프로세스 추적)"""
         # Claude Code CLI 명령 구성
         cmd = self._build_cli_command(prompt, profile)
+        task_id = f"cli_{int(time.time())}_{uuid.uuid4().hex[:6]}"
 
-        print(f"[CLI-Supervisor] 실행 중... (profile: {profile})")
+        print(f"[CLI-Supervisor] 실행 중... (profile: {profile}, task: {task_id})")
 
-        result = subprocess.run(
-            cmd,
-            shell=True,
-            cwd=self.working_dir,
-            capture_output=True,
-            text=True,
-            timeout=self.config["timeout_seconds"],
-            env={**os.environ, "CLAUDE_CODE_NONINTERACTIVE": "1"}
-        )
+        proc = None
+        try:
+            # Popen으로 프로세스 시작 (추적 가능)
+            proc = subprocess.Popen(
+                cmd,
+                shell=True,
+                cwd=self.working_dir,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env={**os.environ, "CLAUDE_CODE_NONINTERACTIVE": "1"}
+            )
 
-        output = result.stdout
-        if len(output) > self.config["output_max_chars"]:
-            output = output[:self.config["output_max_chars"]] + "\n... (출력 잘림)"
+            # 프로세스 등록 (좀비 추적용)
+            register_process(task_id, proc)
 
-        return CLIResult(
-            success=result.returncode == 0,
-            output=output,
-            error=result.stderr if result.returncode != 0 else None,
-            exit_code=result.returncode,
-            retry_count=self.retry_count
-        )
+            # 타임아웃 대기
+            stdout, stderr = proc.communicate(timeout=self.config["timeout_seconds"])
+
+            output = stdout
+            if len(output) > self.config["output_max_chars"]:
+                output = output[:self.config["output_max_chars"]] + "\n... (출력 잘림)"
+
+            return CLIResult(
+                success=proc.returncode == 0,
+                output=output,
+                error=stderr if proc.returncode != 0 else None,
+                exit_code=proc.returncode,
+                retry_count=self.retry_count
+            )
+
+        except subprocess.TimeoutExpired:
+            # 타임아웃 시 프로세스 강제 종료
+            if proc:
+                print(f"[CLI-Supervisor] 타임아웃 - 프로세스 강제 종료 (PID={proc.pid})")
+                proc.kill()
+                proc.wait(timeout=5)
+            raise
+
+        finally:
+            # 프로세스 해제
+            unregister_process(task_id)
 
     def _build_cli_command(self, prompt: str, profile: str) -> str:
         """CLI 명령어 생성"""
@@ -515,18 +1020,92 @@ class CLISupervisor:
         return "\n".join(parts)
 
     def _get_profile_rules(self, profile: str) -> str:
-        """프로필별 규칙 반환"""
+        """
+        v2.5: 프로필별 JSON 강제 규칙
+
+        핵심 원칙:
+        - 너는 검증기다. 생성자가 아니다.
+        - 반드시 JSON만 출력하라.
+        - JSON 외 텍스트 출력 시 즉시 실패로 처리된다.
+        """
         rules = {
-            "coder": """- 출력: unified diff 또는 코드만
-- 설명/인사/추임새 금지
-- 불가능하면: # ABORT: [이유]
-- 주석으로만 짧은 근거""",
-            "qa": """- 출력: PASS/FAIL JSON 또는 테스트 코드 diff
-- 테스트 실행 결과 포함
-- 불가능하면: # ABORT: [이유]""",
-            "reviewer": """- 출력: JSON (APPROVE/REQUEST_CHANGES)
-- 리스크/보안/품질 점검
-- 불가능하면: # ABORT: [이유]"""
+            "coder": """## 출력 형식 (필수 - JSON만)
+
+반드시 아래 JSON만 출력하라. 다른 텍스트 금지.
+
+```json
+{
+  "summary": "변경 요약 (3줄 이내)",
+  "files_changed": ["path/to/file.py"],
+  "diff": "--- a/file.py\\n+++ b/file.py\\n@@ -1,3 +1,4 @@\\n+new line",
+  "todo_next": null
+}
+```
+
+불가능 시:
+```json
+{"summary": "ABORT: [이유]", "files_changed": [], "diff": "", "todo_next": null}
+```
+
+금지: 인사, 설명, 마크다운 헤더, "Let me...", "Here's..."
+JSON 외 출력 = 즉시 FAIL""",
+
+            "qa": """## 출력 형식 (필수 - JSON만)
+
+반드시 아래 JSON만 출력하라. 다른 텍스트 금지.
+
+```json
+{
+  "verdict": "PASS",
+  "tests": [{"name": "test_xxx", "result": "PASS", "reason": null}],
+  "coverage_summary": "85%",
+  "issues_found": []
+}
+```
+
+verdict: PASS | FAIL | SKIP
+불가능 시: {"verdict": "SKIP", "tests": [], "issues_found": ["ABORT: 이유"]}
+
+금지: 설명, 인사, 아키텍처 제안
+JSON 외 출력 = 즉시 FAIL""",
+
+            "reviewer": """## 출력 형식 (필수 - JSON만)
+
+반드시 아래 JSON만 출력하라. 다른 텍스트 금지.
+
+```json
+{
+  "verdict": "APPROVE",
+  "risks": [],
+  "security_score": 10,
+  "approved_files": [],
+  "blocked_files": []
+}
+```
+
+verdict: APPROVE | REVISE | REJECT
+risks: [{severity, file, line, issue, fix_suggestion}]
+
+금지: 코드 수정, 스타일 불평, 인사, 설명
+JSON 외 출력 = 즉시 FAIL""",
+
+            "council": """## 출력 형식 (필수 - JSON만)
+
+반드시 아래 JSON만 출력하라. 다른 텍스트 금지.
+
+```json
+{
+  "score": 7.5,
+  "reasoning": "판단 이유 (2-3문장)",
+  "concerns": ["우려사항"],
+  "approvals": ["긍정적인 점"]
+}
+```
+
+score: 0-10 (소수점 가능)
+
+금지: 설명, 인사
+JSON 외 출력 = 즉시 FAIL"""
         }
         return rules.get(profile, rules["coder"])
 
@@ -541,6 +1120,62 @@ class CLISupervisor:
             return match.group(1).strip()
         return "Unknown reason"
 
+    def _validate_json_output(self, output: str, profile: str) -> tuple[bool, str, dict]:
+        """
+        v2.5: CLI 출력 JSON 검증
+
+        Args:
+            output: CLI 출력
+            profile: 프로필 (coder, qa, reviewer, council)
+
+        Returns:
+            (valid, error_message, parsed_json)
+        """
+        import json as json_module
+
+        # 1. JSON 블록 추출 (```json ... ``` 또는 { ... })
+        json_match = re.search(r'```json\s*([\s\S]*?)\s*```', output)
+        if json_match:
+            json_str = json_match.group(1).strip()
+        else:
+            # { ... } 찾기
+            brace_match = re.search(r'\{[\s\S]*\}', output)
+            if brace_match:
+                json_str = brace_match.group(0).strip()
+            else:
+                return False, "JSON 블록 없음", {}
+
+        # 2. JSON 파싱
+        try:
+            parsed = json_module.loads(json_str)
+        except json_module.JSONDecodeError as e:
+            return False, f"JSON 파싱 실패: {e}", {}
+
+        # 3. 프로필별 필수 필드 검증
+        required_fields = {
+            "coder": ["summary", "files_changed", "diff"],
+            "qa": ["verdict", "tests"],
+            "reviewer": ["verdict", "security_score"],
+            "council": ["score", "reasoning"]
+        }
+
+        fields = required_fields.get(profile, [])
+        missing = [f for f in fields if f not in parsed]
+        if missing:
+            return False, f"필수 필드 누락: {missing}", parsed
+
+        return True, "", parsed
+
+    def _is_valid_cli_output(self, output: str, profile: str) -> bool:
+        """
+        v2.5: CLI 출력이 유효한 JSON인지 빠른 체크
+
+        Returns:
+            True if valid JSON output
+        """
+        valid, _, _ = self._validate_json_output(output, profile)
+        return valid
+
     def _is_context_overflow(self, text: str) -> bool:
         """컨텍스트 초과 에러 감지"""
         text_lower = text.lower()
@@ -554,6 +1189,13 @@ class CLISupervisor:
         text_lower = text.lower()
         for pattern in FATAL_ERROR_PATTERNS:
             if re.search(pattern, text_lower):
+                return True
+        return False
+
+    def _is_session_conflict(self, text: str) -> bool:
+        """세션 충돌 에러 감지 (v2.4.2)"""
+        for pattern in SESSION_CONFLICT_PATTERNS:
+            if re.search(pattern, text, re.IGNORECASE):
                 return True
         return False
 
@@ -759,6 +1401,96 @@ def recover_and_continue(session_id: str, new_prompt: str, profile: str = "coder
         return result.output
     else:
         return f"# ABORT: 세션 복구 후에도 실패\n{result.error}"
+
+
+# =============================================================================
+# Queue-based API (v2.4.1)
+# =============================================================================
+
+def call_cli_queued(
+    messages: List[Dict[str, str]],
+    system_prompt: str = "",
+    profile: str = "coder",
+    session_id: str = None,
+    use_queue: bool = True
+) -> str:
+    """
+    Queue를 통한 CLI 호출 (동시 실행 제한)
+
+    Args:
+        messages: 메시지 리스트
+        system_prompt: 시스템 프롬프트
+        profile: 프로필
+        session_id: 세션 ID
+        use_queue: False면 직접 호출 (기존 방식)
+
+    Returns:
+        응답 문자열
+    """
+    if not use_queue:
+        return call_claude_cli(messages, system_prompt, profile, session_id)
+
+    # 마지막 사용자 메시지 추출
+    user_message = ""
+    for msg in reversed(messages):
+        if msg.get("role") == "user":
+            user_message = msg.get("content", "")
+            break
+
+    if not user_message:
+        return "# ABORT: 사용자 메시지 없음"
+
+    # 컨텍스트 구성
+    context_parts = []
+    recent_messages = messages[-6:-1] if len(messages) > 5 else messages[:-1]
+    for msg in recent_messages:
+        role = msg.get("role", "unknown")
+        content = msg.get("content", "")[:1000]
+        context_parts.append(f"[{role.upper()}]\n{content}\n[/{role.upper()}]")
+    task_context = "\n\n".join(context_parts) if context_parts else ""
+
+    # 태스크 생성
+    task = CLITask(
+        task_id=f"cli_{int(time.time())}_{uuid.uuid4().hex[:8]}",
+        prompt=user_message,
+        profile=profile,
+        system_prompt=system_prompt,
+        session_id=session_id,
+        task_context=task_context
+    )
+
+    # 큐에 제출 (결과 대기)
+    queue = get_cli_queue()
+    result = queue.submit(task)
+
+    # 결과 처리
+    if result.success:
+        return result.output
+
+    if result.aborted:
+        return f"""# ABORT: {result.abort_reason}
+
+---
+**CLI Queue 보고**:
+- 큐 대기 시간: {result.queue_wait_time:.1f}초
+- 재시도 횟수: {result.retry_count}
+- 에러: {result.error or 'N/A'}
+
+PM에게 태스크 재정의 또는 분할을 요청하세요."""
+
+    return f"""# ABORT: CLI 실행 실패
+
+**에러**: {result.error}
+**Exit Code**: {result.exit_code}
+
+출력:
+{result.output[:2000] if result.output else '(없음)'}"""
+
+
+def get_queue_status() -> Dict[str, Any]:
+    """CLI 큐 상태 조회"""
+    queue = get_cli_queue()
+    return queue.get_status()
 
 
 # =============================================================================

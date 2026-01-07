@@ -1,12 +1,13 @@
 """
-Hattz Empire - Agent Monitor API v2.2.1
-Docker 컨테이너 + Jobs 파이프라인 통합 모니터링
+Hattz Empire - Agent Monitor API v2.4.1
+CLI Queue + 프로세스 모니터링 (Docker 제거)
 
 Endpoints:
-- GET /api/monitor/docker         - Docker 컨테이너 상태
+- GET /api/monitor/cli            - CLI Queue + 프로세스 상태
 - GET /api/monitor/pipeline       - Jobs 파이프라인 상태
 - GET /api/monitor/dashboard      - 통합 대시보드
 - GET /api/monitor/stream         - SSE 실시간 스트림
+- POST /api/monitor/kill-zombie   - 좀비 프로세스 강제 종료
 """
 import os
 import json
@@ -19,107 +20,57 @@ from src.services.agent_monitor import get_agent_monitor
 from . import monitor_bp
 
 # ===========================================================================
-# Docker Container Monitor
+# CLI Queue & Process Monitor (v2.4.1)
 # ===========================================================================
 
-CONTAINER_NAMES = {
-    "hattz_web": {"role": "Control Tower", "llm": "-", "persona": "DB Owner"},
-    "hattz_pm_worker": {"role": "PM", "mode": "worker", "llm": "GPT-5.2", "persona": "Strategist"},
-    "hattz_pm_reviewer": {"role": "PM", "mode": "reviewer", "llm": "Claude CLI", "persona": "Skeptic"},
-    "hattz_coder_worker": {"role": "Coder", "mode": "worker", "llm": "Claude CLI", "persona": "Implementer"},
-    "hattz_coder_reviewer": {"role": "Coder", "mode": "reviewer", "llm": "Claude CLI", "persona": "Devil's Advocate"},
-    "hattz_qa_worker": {"role": "QA", "mode": "worker", "llm": "Claude CLI", "persona": "Tester"},
-    "hattz_qa_reviewer": {"role": "QA", "mode": "reviewer", "llm": "Claude CLI", "persona": "Breaker"},
-    "hattz_reviewer_worker": {"role": "Reviewer", "mode": "worker", "llm": "Gemini 2.5", "persona": "Pragmatist"},
-    "hattz_reviewer_reviewer": {"role": "Reviewer", "mode": "reviewer", "llm": "Claude CLI", "persona": "Security Hawk"},
-}
+def _get_cli_status():
+    """CLI Queue + 활성 프로세스 상태 조회"""
+    from src.services.cli_supervisor import (
+        get_queue_status,
+        get_active_processes,
+        CLI_CONFIG
+    )
 
-
-def _get_docker_containers():
-    """Docker 컨테이너 상태 조회"""
-    containers = []
-
-    try:
-        # docker ps -a --format json (Windows에서는 shell=True, encoding='utf-8' 필요)
-        result = subprocess.run(
-            'docker ps -a --format "{{json .}}"',
-            capture_output=True,
-            text=True,
-            timeout=10,
-            shell=True,
-            encoding='utf-8',
-            errors='replace'
-        )
-
-        if result.returncode != 0:
-            return {"error": f"Docker error: {result.stderr}", "containers": []}
-
-        stdout = result.stdout or ""
-        if not stdout.strip():
-            return {"containers": [], "total": 0, "running": 0, "healthy": 0}
-
-        for line in stdout.strip().split("\n"):
-            if not line.strip():
-                continue
-            try:
-                container = json.loads(line)
-                name = container.get("Names", "")
-
-                # hattz_ 접두사가 있는 컨테이너만
-                if not name.startswith("hattz_"):
-                    continue
-
-                info = CONTAINER_NAMES.get(name, {})
-                status = container.get("Status", "")
-                state = container.get("State", "")
-
-                # 상태 파싱
-                is_running = state == "running" or "Up" in status
-                is_healthy = "(healthy)" in status
-
-                containers.append({
-                    "name": name,
-                    "short_name": name.replace("hattz_", ""),
-                    "status": "running" if is_running else "stopped",
-                    "health": "healthy" if is_healthy else ("unhealthy" if is_running else "stopped"),
-                    "status_text": status,
-                    "image": container.get("Image", ""),
-                    "ports": container.get("Ports", "") if isinstance(container.get("Ports"), str) else "",
-                    "role": info.get("role", "-"),
-                    "mode": info.get("mode", "-"),
-                    "llm": info.get("llm", "-"),
-                    "persona": info.get("persona", "-"),
-                    "created": container.get("CreatedAt", ""),
-                })
-            except json.JSONDecodeError as e:
-                continue
-
-    except subprocess.TimeoutExpired:
-        return {"error": "Docker timeout", "containers": []}
-    except FileNotFoundError:
-        return {"error": "Docker not installed", "containers": []}
-    except Exception as e:
-        return {"error": str(e), "containers": []}
-
-    # 정렬: web 먼저, 그 다음 role/mode 순
-    order = {"web": 0, "pm": 1, "coder": 2, "qa": 3, "reviewer": 4}
-    containers.sort(key=lambda x: (
-        order.get(x["short_name"].split("_")[0], 99),
-        0 if x.get("mode") == "worker" else 1
-    ))
+    queue_status = get_queue_status()
+    process_status = get_active_processes()
 
     return {
-        "containers": containers,
-        "total": len(containers),
-        "running": sum(1 for c in containers if c["status"] == "running"),
-        "healthy": sum(1 for c in containers if c["health"] == "healthy"),
+        "queue": queue_status,
+        "processes": process_status,
+        "config": {
+            "max_concurrent": CLI_CONFIG["max_concurrent"],
+            "queue_max_size": CLI_CONFIG["queue_max_size"],
+            "rate_limit_calls": CLI_CONFIG["rate_limit_calls"],
+            "rate_limit_period": CLI_CONFIG["rate_limit_period"],
+            "timeout_seconds": CLI_CONFIG["timeout_seconds"],
+        },
+        "health": {
+            "queue_healthy": queue_status["queue_size"] < CLI_CONFIG["queue_max_size"],
+            "rate_limit_ok": queue_status["rate_limiter"]["available"] > 0,
+            "no_zombies": process_status["active_count"] <= CLI_CONFIG["max_concurrent"],
+        }
     }
 
 
-@monitor_bp.route('/docker')
-def get_docker_status():
-    """Docker 컨테이너 상태"""
-    return jsonify(_get_docker_containers())
+@monitor_bp.route('/cli')
+def get_cli_health():
+    """CLI Queue + 프로세스 상태"""
+    return jsonify(_get_cli_status())
+
+
+@monitor_bp.route('/kill-zombie', methods=['POST'])
+def kill_zombie():
+    """좀비 프로세스 강제 종료"""
+    from src.services.cli_supervisor import kill_zombie_processes
+
+    timeout = request.json.get('timeout_seconds', 600) if request.json else 600
+    killed = kill_zombie_processes(timeout_seconds=timeout)
+
+    return jsonify({
+        "killed_count": len(killed),
+        "killed_tasks": killed,
+        "message": f"{len(killed)}개 좀비 프로세스 종료됨" if killed else "좀비 프로세스 없음"
+    })
 
 
 # ===========================================================================
@@ -233,12 +184,12 @@ def get_processes():
 
 @monitor_bp.route('/dashboard')
 def get_dashboard():
-    """대시보드용 전체 상태 (Docker + Pipeline + Agent)"""
+    """대시보드용 전체 상태 (CLI + Pipeline + Agent)"""
     monitor = get_agent_monitor()
     agent_data = monitor.get_dashboard_data()
 
-    # Docker 컨테이너 상태
-    docker_data = _get_docker_containers()
+    # CLI Queue + 프로세스 상태
+    cli_data = _get_cli_status()
 
     # Pipeline 상태
     pipeline_data = _get_pipeline_status()
@@ -246,8 +197,8 @@ def get_dashboard():
     return jsonify({
         # Agent Monitor 기존 데이터
         **agent_data,
-        # Docker 컨테이너
-        "docker": docker_data,
+        # CLI Queue + 프로세스
+        "cli": cli_data,
         # Jobs 파이프라인
         "pipeline": pipeline_data,
         # 타임스탬프

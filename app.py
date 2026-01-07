@@ -72,6 +72,10 @@ with app.app_context():
     init_embedding_worker()
     print("[EmbeddingQueue] Background worker started")
 
+    # v2.4.2: CLI 세션 초기화 (충돌 방지)
+    from src.services.cli_supervisor import reset_all_sessions
+    reset_all_sessions()
+
 # 종료 시 워커 정리
 atexit.register(shutdown_embedding_worker)
 

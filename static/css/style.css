@@ -39,13 +39,29 @@ body {
     font-family: 'JetBrains Mono', monospace;
     background-color: var(--bg-primary);
     color: var(--text-primary);
+    min-height: 100vh;
+    height: auto;
+    overflow-x: hidden;
+    overflow-y: auto;
+}
+
+/* 채팅 페이지는 고정 높이 (스크롤은 내부에서 처리) */
+body.page-chat {
     height: 100vh;
     overflow: hidden;
 }
 
+/* 관리자/모니터 페이지는 자연스러운 스크롤 */
+body.page-monitor,
+body.page-costs,
+body.page-admin {
+    height: auto;
+    overflow: auto;
+}
+
 .container {
     display: flex;
-    height: 100vh;
+    min-height: 100vh;
 }
 
 /* Sidebar */
@@ -1028,7 +1044,45 @@ body {
     50% { opacity: 1; transform: translateY(-4px); }
 }
 
-/* Responsive - Large screens (1200px ~ 1400px) */
+/* Responsive - Extra Large screens (1920px+) */
+@media (min-width: 1920px) {
+    .sidebar {
+        width: 320px;
+    }
+
+    .chat-messages {
+        padding: 32px 40px;
+    }
+
+    .message {
+        max-width: 80%;
+    }
+
+    .welcome-message {
+        padding: 80px 40px;
+    }
+
+    .welcome-message h2 {
+        font-size: 28px;
+    }
+
+    .background-tasks-area {
+        width: 360px;
+    }
+}
+
+/* Responsive - Large screens (1400px ~ 1920px) */
+@media (min-width: 1400px) and (max-width: 1919px) {
+    .sidebar {
+        width: 300px;
+    }
+
+    .chat-messages {
+        padding: 28px 32px;
+    }
+}
+
+/* Responsive - Medium-Large screens (1200px ~ 1400px) */
 @media (max-width: 1400px) {
     .sidebar {
         width: 260px;

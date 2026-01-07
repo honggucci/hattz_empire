@@ -460,20 +460,41 @@ CEO 검토: {'필요' if result.requires_ceo else '불필요'}
                     persona.id,           # persona_id 추가
                     council_type          # council_type 추가
                 )
-                # JSON 추출 (코드블록 안에 있을 수 있음)
-                json_str = response
-                if "```json" in response:
-                    json_str = response.split("```json")[1].split("```")[0]
-                elif "```" in response:
-                    json_str = response.split("```")[1].split("```")[0]
-                data = json.loads(json_str.strip())
+
+                # v2.4.2: None/빈 응답 체크 (startswith 에러 방지)
+                if not response or not isinstance(response, str):
+                    print(f"[Council] 빈 응답 ({persona.name}): {type(response)}")
+                    data = {
+                        "score": 5.0,
+                        "reasoning": "CLI 응답 없음 (None 또는 빈 문자열)",
+                        "concerns": ["CLI 응답 없음 - 인프라 점검 필요"],
+                        "approvals": []
+                    }
+                # v2.4.2: CLI 에러 체크 (JSON 파싱 전에)
+                elif response.startswith("[CLI ERROR]") or response.startswith("[CLI Error]"):
+                    print(f"[Council] CLI 에러 ({persona.name}): {response[:100]}")
+                    data = {
+                        "score": 5.0,
+                        "reasoning": f"CLI 호출 실패: {response[:200]}",
+                        "concerns": ["CLI 실행 오류 - 세션 또는 인프라 문제"],
+                        "approvals": []
+                    }
+                else:
+                    # JSON 추출 (코드블록 안에 있을 수 있음)
+                    json_str = response
+                    if "```json" in response:
+                        json_str = response.split("```json")[1].split("```")[0]
+                    elif "```" in response:
+                        json_str = response.split("```")[1].split("```")[0]
+                    data = json.loads(json_str.strip())
             except json.JSONDecodeError as e:
                 # JSON 파싱 실패 시 기본값
                 print(f"[Council] JSON 파싱 실패 ({persona.name}): {e}")
+                print(f"[Council] 원본 응답: {response[:500] if response else 'None'}")
                 data = {
                     "score": 5.0,
                     "reasoning": f"응답 파싱 실패: JSON 형식 오류",
-                    "concerns": ["응답 형식 오류"],
+                    "concerns": ["JSON 파싱 오류 - 응답 형식 확인 필요"],
                     "approvals": []
                 }
             except Exception as e:
@@ -519,7 +540,7 @@ CEO 검토: {'필요' if result.requires_ceo else '불필요'}
         council_type: str,
         scores: List[JudgeScore]
     ) -> tuple[Verdict, bool]:
-        """판정 결정"""
+        """판정 결정 (v2.4: PASS 아니면 무조건 재수정)"""
         config = COUNCIL_TYPES[council_type]
 
         score_values = [s.score for s in scores]
@@ -532,13 +553,11 @@ CEO 검토: {'필요' if result.requires_ceo else '불필요'}
         if std > config["max_std_for_auto_pass"]:
             return Verdict.CEO_REVIEW, True
 
-        # 점수 기준 판정
+        # v2.4: PASS가 아니면 무조건 FAIL (재수정 필요)
         if avg >= config["pass_threshold"]:
             return Verdict.PASS, requires_ceo
-        elif avg >= config["conditional_threshold"]:
-            return Verdict.CONDITIONAL, requires_ceo
         else:
-            return Verdict.FAIL, True  # 실패는 항상 CEO 알림
+            return Verdict.FAIL, False  # PASS 아니면 무조건 재수정
 
     def _generate_summary(self, verdict: Verdict, judges: List[JudgeScore]) -> str:
         """판정 요약 생성"""
@@ -553,10 +572,8 @@ CEO 검토: {'필요' if result.requires_ceo else '불필요'}
 
         if verdict == Verdict.PASS:
             summary_parts.append("✅ 위원회 통과")
-        elif verdict == Verdict.CONDITIONAL:
-            summary_parts.append("⚠️ 조건부 통과 - 수정 후 재심 필요")
         elif verdict == Verdict.FAIL:
-            summary_parts.append("❌ 반려 - 전면 재검토 필요")
+            summary_parts.append("❌ 재수정 필요")
         elif verdict == Verdict.CEO_REVIEW:
             summary_parts.append("👔 CEO 검토 필요 - 의견 분분")
 
@@ -653,6 +670,13 @@ CEO 검토: {'필요' if result.requires_ceo else '불필요'}
 # =============================================================================
 
 _council: Optional[PersonaCouncil] = None
+
+
+def reset_council():
+    """싱글톤 리셋 (서버 재시작 또는 llm_caller 재설정 시 사용)"""
+    global _council
+    _council = None
+    print("[Council] 싱글톤 리셋 완료")
 
 
 def get_council(session_id: Optional[str] = None, project: Optional[str] = None) -> PersonaCouncil:

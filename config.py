@@ -27,6 +27,20 @@ env_path = Path(__file__).parent / '.env'
 load_dotenv(env_path, override=True)
 
 
+# =============================================================================
+# v2.5: Output Contract 설정
+# =============================================================================
+
+# v2.5.1: True 기본값으로 전환 (CLI JSON 강제 완료 후)
+# True: 형식 오류 시 즉시 예외 발생 (Fail Fast) - 권장
+# False: 경고 로그만 남기고 원본 반환 (Soft Landing)
+ENFORCE_OUTPUT_CONTRACT = os.getenv("ENFORCE_OUTPUT_CONTRACT", "true").lower() == "true"
+
+# 형식 검증에서 제외할 에이전트 (외부 API 등 JSON 강제 불가)
+# 주의: 면제 에이전트 추가는 기술 부채. 최소화 필수.
+CONTRACT_EXEMPT_AGENTS = {"researcher", "analyst"}  # Perplexity, Gemini는 JSON 강제 어려움
+
+
 @dataclass
 class ModelConfig:
     """LLM 모델 설정"""
@@ -143,22 +157,21 @@ AGENT_CONFIG = {
         "prompt_id": "prompt_strategist_v2_1",
     },
 
-    # 로그/긴 텍스트 요약 전용 (의사결정 금지)
+    # 로그/긴 텍스트 요약 + 프로젝트 분석 (Claude CLI로 변경 - 파일시스템 접근 가능)
+    # v2.4.1: Gemini Flash → Claude CLI Sonnet (파일 접근 문제 해결)
     "analyst": {
-        "provider": "google",
-        "model": "gemini-2.5-flash",  # v2.1.1: gemini-2.0-flash → gemini-2.5-flash
-        "tier": "LOG_ONLY",
-        "temperature": 0.1,
-        "max_output_tokens": 520,  # v2.1.1: 600→520
+        "provider": "claude_cli",
+        "tier": "EXEC",
+        "profile": "reviewer",  # Sonnet 4 사용
         "prompt_id": "prompt_analyst_logonly_v2_1",
     },
 
     "documentor": {
-        "provider": "google",
-        "model": "gemini-2.5-flash",  # v2.1.1: gemini-2.0-flash → gemini-2.5-flash
-        "tier": "LOG_ONLY",
-        "temperature": 0.1,
-        "max_output_tokens": 700,  # v2.1.1: 900→700
+        "provider": "anthropic",
+        "model": "claude-sonnet-4-5-20250514",  # v2.5: Gemini → Claude Sonnet 4 (요약/문서화 최적)
+        "tier": "STANDARD",
+        "temperature": 0.2,
+        "max_output_tokens": 1024,
         "prompt_id": "prompt_documentor_v2_1",
     },
 
@@ -320,14 +333,14 @@ DUAL_ENGINES = {
     ),
 
     # =========================================================================
-    # Documentor: 산출물/문서 작성 (저렴 + 효율)
+    # Documentor: v2.5 Claude Sonnet 4 단일 엔진 (요약/문서화 최적)
     # =========================================================================
     "documentor": DualEngineConfig(
         role="documentor",
-        engine_1=MODELS["gemini_flash"],       # 대용량 컨텍스트, 구조화
-        engine_2=MODELS["gpt_5_mini"],       # 저렴, 빠른 수정/보완
-        merge_strategy="primary_fallback",   # Gemini 우선, 보완은 GPT-5-mini
-        description="문서/리포트/README/스펙 작성 (비용 효율)",
+        engine_1=MODELS["claude_sonnet"],      # v2.5: Claude Sonnet 4 (요약 능력 최고)
+        engine_2=MODELS["claude_sonnet"],      # 단일 엔진으로 운용
+        merge_strategy="primary_fallback",
+        description="커밋 메시지/변경 요약/문서화 (Claude Sonnet 4)",
     ),
 }
 

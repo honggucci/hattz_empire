@@ -523,21 +523,26 @@ async function sendMessageViaSSE(message, agent) {
     }
 }
 
-// Abort current request
+// Abort current request (v2.4.3: CLI 프로세스 강제 종료 추가)
 async function abortRequest() {
     console.log('Aborting request...');
 
-    // 1. 서버측 스트림 중단 (먼저!)
+    // 1. 서버측 스트림 + CLI 프로세스 중단
     if (currentStreamId) {
         try {
-            await fetch('/api/chat/abort', {
+            const response = await fetch('/api/chat/abort', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ stream_id: currentStreamId })
+                body: JSON.stringify({
+                    stream_id: currentStreamId,
+                    session_id: currentSessionId,  // v2.4.3: CLI 프로세스 종료용
+                    kill_cli: true
+                })
             });
-            console.log('[Abort] Server stream aborted:', currentStreamId);
+            const result = await response.json();
+            console.log('[Abort] 결과:', result);
         } catch (e) {
-            console.error('[Abort] Failed to abort server stream:', e);
+            console.error('[Abort] 실패:', e);
         }
         currentStreamId = null;
     }

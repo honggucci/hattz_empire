@@ -261,6 +261,34 @@ hattz_empire/
 
 ## 최근 작업 내역
 
+### 세션 8-1 (2026-01-07) - v2.4.1 Analyst 파일 컨텍스트 주입
+
+Analyst(Gemini Flash)가 파일시스템에 접근할 수 없는 문제 해결:
+
+1. **문제점**
+   - Analyst가 프로젝트 분석 요청 받으면 "프로젝트 디렉토리가 존재하지 않음" 에러
+   - 원인: Gemini Flash API는 파일시스템 접근 불가
+
+2. **해결책: `collect_project_context()` 함수 추가**
+   - 위치: `src/core/llm_caller.py`
+   - 기능: 프로젝트 파일 구조 + 주요 파일 내용을 자동 수집
+   - 프로젝트별 루트 경로 매핑 (`PROJECT_PATHS`)
+
+3. **자동 컨텍스트 주입**
+   - `call_agent()`에서 `agent_role == "analyst"`일 때 자동 주입
+   - 수집 내용:
+     - 파일 구조 (Python 파일 수, Markdown 파일 수)
+     - 디렉토리별 파일 목록
+     - 주요 파일 내용 (CLAUDE.md, config.py, app.py 등)
+     - 테스트 파일 수 (품질 지표)
+   - 최대 30,000자 제한
+
+4. **지원 프로젝트**
+   - `hattz_empire`: 현재 프로젝트
+   - `wpcn`: WPCN 백테스터 프로젝트
+
+---
+
 ### 세션 8 (2026-01-07) - v2.4 Dual Engine V3 + Persona Pack
 
 Dual Engine V3 아키텍처 완성 및 페르소나 시스템 구축:

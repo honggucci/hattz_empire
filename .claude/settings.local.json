@@ -39,7 +39,11 @@
       "Bash(cmd /c \"npm install -g @anthropic-ai/claude-code\")",
       "Bash(powershell -Command \"npm install -g @anthropic-ai/claude-code\":*)",
       "Bash(powershell -Command \"node --version; Get-Command node | Select-Object Source\")",
-      "Bash(powershell:*)"
+      "Bash(powershell:*)",
+      "Bash(start cmd /c \"python app.py\")",
+      "Bash(ngrok config check:*)",
+      "Bash(start cmd /c \"python c:/Users/hahonggu/Desktop/coin_master/hattz_empire/app.py\")",
+      "Bash(start cmd /c \"ngrok http 5000 --domain=caitlyn-supercivilized-intrudingly.ngrok-free.app\")"
     ]
   }
 }

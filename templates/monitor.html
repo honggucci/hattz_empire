@@ -13,6 +13,16 @@
             font-family: 'JetBrains Mono', monospace;
             margin: 0;
             padding: 20px;
+            min-height: 100vh;
+            overflow-x: hidden;
+            overflow-y: auto;
+        }
+
+        /* 전체 컨테이너 */
+        .monitor-wrapper {
+            max-width: 1600px;
+            margin: 0 auto;
+            width: 100%;
         }
 
         .monitor-header {
@@ -586,7 +596,8 @@
         }
     </style>
 </head>
-<body>
+<body class="page-monitor">
+    <div class="monitor-wrapper">
     <div class="monitor-header">
         <h1>Agent Monitor v2.2.1</h1>
         <div>
@@ -994,5 +1005,6 @@
         setInterval(updateEmbeddingQueue, 5000);
         setInterval(updateProcesses, 5000);
     </script>
+    </div><!-- .monitor-wrapper -->
 </body>
 </html>
