@@ -2,6 +2,16 @@
 Hattz Empire - Claude Code CLI Supervisor
 Claude Code CLI 호출 + 세션 관리 + 에러 복구
 
+v2.5.3: CLI Semantic Guard 추가
+- 코드 기반 의미 검증 (LLM 없이)
+- 금지 패턴 블랙리스트 (의미적 NULL 감지)
+- Semantic Failure → RetryEscalator 편입
+
+v2.5.2: Retry Escalation 시스템 추가
+- 실패 시그니처 해시로 동일 실패 식별
+- 3단계 에스컬레이션: Self-repair → Role-switch → Hard Fail
+- 동일 prompt+system+temperature 재시도 금지
+
 v2.4.1: Queue 기반 CLI 통제 추가
 - CLIQueue: 최대 동시 실행 제한 (기본 2개)
 - RateLimiter: 분당 호출 제한 (기본 10회)
@@ -21,10 +31,494 @@ import json
 import time
 import uuid
 import threading
+import hashlib
 from queue import Queue, Empty
 from typing import Optional, Dict, Any, List, Tuple, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from enum import Enum
+
+
+# =============================================================================
+# Retry Escalation System (v2.5.2)
+# =============================================================================
+
+class EscalationLevel(Enum):
+    """에스컬레이션 레벨"""
+    SELF_REPAIR = 1      # 동일 역할, 에러 피드백으로 재시도
+    ROLE_SWITCH = 2      # 다른 역할로 전환 (coder→reviewer 등)
+    HARD_FAIL = 3        # 즉시 실패, PM 에스컬레이션
+
+
+@dataclass
+class FailureSignature:
+    """
+    실패 시그니처 - 동일 실패 식별용
+
+    핵심: 같은 에러가 반복되면 재시도 무의미
+    """
+    error_type: str           # JSON_PARSE_ERROR, MISSING_FIELD, TIMEOUT, etc.
+    missing_fields: tuple     # 누락된 필드들 (정렬된 튜플)
+    profile: str              # coder, qa, reviewer, council
+    prompt_hash: str          # 프롬프트 앞 500자 해시 (동일 요청 식별)
+
+    def __hash__(self) -> int:
+        return hash((self.error_type, self.missing_fields, self.profile, self.prompt_hash))
+
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, FailureSignature):
+            return False
+        return (self.error_type == other.error_type and
+                self.missing_fields == other.missing_fields and
+                self.profile == other.profile and
+                self.prompt_hash == other.prompt_hash)
+
+    def to_dict(self) -> dict:
+        return {
+            "error_type": self.error_type,
+            "missing_fields": list(self.missing_fields),
+            "profile": self.profile,
+            "prompt_hash": self.prompt_hash[:8]  # 앞 8자만
+        }
+
+
+class RetryEscalator:
+    """
+    Retry Escalation Manager
+
+    원칙:
+    1. 같은 시그니처로 2번 실패하면 에스컬레이션
+    2. Self-repair → Role-switch → Hard Fail
+    3. 동일 prompt+system 재시도 금지 (변형 필수)
+    """
+
+    # 역할 전환 매핑 (Role-switch용)
+    ROLE_SWITCH_MAP = {
+        "coder": "reviewer",     # 코더 → 리뷰어 (다른 관점)
+        "reviewer": "coder",     # 리뷰어 → 코더
+        "qa": "coder",           # QA → 코더
+        "council": "reviewer",   # 위원회 → 리뷰어
+    }
+
+    def __init__(self, max_same_signature: int = 2):
+        self.max_same_signature = max_same_signature
+        self._failure_history: Dict[FailureSignature, int] = {}
+        self._escalation_log: List[Dict] = []
+        self._role_switch_used: Dict[str, bool] = {}  # v2.5.5 프로필별 역할 전환 1회 제한
+        self._lock = threading.Lock()
+
+    def compute_signature(
+        self,
+        error_type: str,
+        missing_fields: List[str],
+        profile: str,
+        prompt: str
+    ) -> FailureSignature:
+        """실패 시그니처 계산"""
+        # 프롬프트 해시 (앞 500자 기준)
+        prompt_snippet = prompt[:500] if prompt else ""
+        prompt_hash = hashlib.md5(prompt_snippet.encode()).hexdigest()
+
+        return FailureSignature(
+            error_type=error_type,
+            missing_fields=tuple(sorted(missing_fields)) if missing_fields else (),
+            profile=profile,
+            prompt_hash=prompt_hash
+        )
+
+    def record_failure(self, signature: FailureSignature) -> EscalationLevel:
+        """
+        실패 기록 + 에스컬레이션 레벨 반환
+
+        Returns:
+            EscalationLevel - 다음 행동 지시
+        """
+        with self._lock:
+            # 실패 횟수 증가
+            count = self._failure_history.get(signature, 0) + 1
+            self._failure_history[signature] = count
+
+            # 로그 기록
+            self._escalation_log.append({
+                "timestamp": time.time(),
+                "signature": signature.to_dict(),
+                "count": count
+            })
+
+            # 에스컬레이션 결정
+            if count >= self.max_same_signature + 1:
+                level = EscalationLevel.HARD_FAIL
+            elif count == self.max_same_signature:
+                level = EscalationLevel.ROLE_SWITCH
+            else:
+                level = EscalationLevel.SELF_REPAIR
+
+            print(f"[RetryEscalator] 실패 기록: {signature.error_type} (count={count}, level={level.name})")
+            return level
+
+    def get_escalation_action(
+        self,
+        level: EscalationLevel,
+        current_profile: str,
+        original_prompt: str,
+        error_message: str
+    ) -> Dict[str, Any]:
+        """
+        에스컬레이션 레벨에 따른 액션 반환
+
+        Returns:
+            {
+                "action": "retry" | "switch" | "abort",
+                "new_profile": str (switch일 때),
+                "modified_prompt": str (retry/switch일 때),
+                "reason": str
+            }
+        """
+        if level == EscalationLevel.HARD_FAIL:
+            return {
+                "action": "abort",
+                "reason": f"동일 에러 반복 (max={self.max_same_signature}회 초과)",
+                "error_type": "ESCALATION_HARD_FAIL"
+            }
+
+        elif level == EscalationLevel.ROLE_SWITCH:
+            # v2.5.5 역할 전환 1회 제한 체크
+            if self._role_switch_used.get(current_profile, False):
+                return {
+                    "action": "abort",
+                    "reason": f"역할 전환 이미 사용됨 (프로필={current_profile}, 1회 제한)",
+                    "error_type": "ROLE_SWITCH_EXHAUSTED"
+                }
+
+            # 역할 전환 사용 기록
+            self._role_switch_used[current_profile] = True
+            new_profile = self.ROLE_SWITCH_MAP.get(current_profile, "reviewer")
+
+            # 역할 전환 프롬프트 (다른 관점으로 시도)
+            modified_prompt = f"""[ROLE_SWITCH]
+이전 {current_profile} 역할에서 실패했습니다.
+당신은 {new_profile} 관점에서 이 작업을 처리해주세요.
+
+이전 에러: {error_message[:200]}
+
+[ORIGINAL_TASK]
+{original_prompt}
+[/ORIGINAL_TASK]
+
+반드시 JSON 형식으로 출력하세요."""
+
+            return {
+                "action": "switch",
+                "new_profile": new_profile,
+                "modified_prompt": modified_prompt,
+                "reason": f"역할 전환: {current_profile} → {new_profile}"
+            }
+
+        else:  # SELF_REPAIR
+            # 에러 피드백 포함 재시도 (프롬프트 변형)
+            modified_prompt = f"""[ERROR_FEEDBACK]
+이전 응답이 형식 오류로 거부되었습니다.
+
+오류 내용: {error_message}
+
+반드시 수정하여 올바른 JSON만 출력하세요.
+JSON 외 텍스트 = 즉시 FAIL
+
+[ORIGINAL_TASK]
+{original_prompt}
+[/ORIGINAL_TASK]"""
+
+            return {
+                "action": "retry",
+                "modified_prompt": modified_prompt,
+                "reason": "에러 피드백 포함 재시도"
+            }
+
+    def clear_history(self, profile: str = None):
+        """실패 히스토리 초기화 (v2.5.5 역할 전환 상태도 초기화)"""
+        with self._lock:
+            if profile:
+                # 특정 프로필만 초기화
+                keys_to_remove = [k for k in self._failure_history if k.profile == profile]
+                for k in keys_to_remove:
+                    del self._failure_history[k]
+                # v2.5.5 역할 전환 상태도 초기화
+                if profile in self._role_switch_used:
+                    del self._role_switch_used[profile]
+            else:
+                self._failure_history.clear()
+                self._role_switch_used.clear()
+            print(f"[RetryEscalator] 히스토리 초기화 (profile={profile or 'all'})")
+
+    def get_stats(self) -> Dict[str, Any]:
+        """통계 조회"""
+        with self._lock:
+            return {
+                "total_failures": sum(self._failure_history.values()),
+                "unique_signatures": len(self._failure_history),
+                "recent_escalations": self._escalation_log[-10:],
+                "by_profile": self._count_by_profile()
+            }
+
+    def _count_by_profile(self) -> Dict[str, int]:
+        result = {}
+        for sig, count in self._failure_history.items():
+            result[sig.profile] = result.get(sig.profile, 0) + count
+        return result
+
+
+# 싱글톤 인스턴스
+_retry_escalator: Optional[RetryEscalator] = None
+
+
+def get_retry_escalator() -> RetryEscalator:
+    """RetryEscalator 싱글톤"""
+    global _retry_escalator
+    if _retry_escalator is None:
+        _retry_escalator = RetryEscalator(max_same_signature=2)
+    return _retry_escalator
+
+
+# =============================================================================
+# Semantic Guard (v2.5.3)
+# =============================================================================
+
+class SemanticGuard:
+    """
+    코드 기반 의미 검증 (LLM 없이)
+
+    원칙:
+    1. JSON 형식은 통과했지만 의미가 없는 응답 감지
+    2. 금지 패턴 블랙리스트로 "의미적 NULL" 감지
+    3. 필드별 규칙으로 최소 품질 강제
+    4. Semantic Failure도 RetryEscalator로 편입
+    """
+
+    # 의미적 NULL 패턴 (이런 표현은 아무 정보도 없음)
+    SEMANTIC_NULL_PATTERNS = [
+        # 한글 패턴
+        r"검토했습니다",
+        r"확인했습니다",
+        r"문제.*없습니다",
+        r"추가.*확인.*필요",
+        r"이상.*없음",
+        r"정상.*처리",
+        r"완료.*되었습니다",
+        r"진행.*하겠습니다",
+        r"살펴보겠습니다",
+        # 영어 패턴
+        r"looks good",
+        r"no issues",
+        r"seems fine",
+        r"will proceed",
+        r"I have reviewed",
+        r"I checked",
+        r"everything is fine",
+        r"no problems found",
+    ]
+
+    # 프로필별 필수 의미 규칙
+    SEMANTIC_RULES = {
+        "coder": {
+            "summary": {
+                "min_length": 10,           # 최소 10자
+                "require_verb": True,       # 동사 필수 (수정, 추가, 삭제 등)
+                "require_target": True,     # 대상 필수 (파일, 함수, 클래스 등)
+            },
+            "diff": {
+                "min_length": 20,           # diff는 최소 20자
+                "require_pattern": r"^[-+@]",  # diff 형식 패턴
+            },
+            "files_changed": {
+                "non_empty_if_diff": True,  # diff 있으면 files_changed도 있어야
+            }
+        },
+        "qa": {
+            "verdict": {
+                "valid_values": ["PASS", "FAIL", "SKIP"],
+            },
+            "tests": {
+                "non_empty_if_pass": True,  # PASS면 tests 있어야
+            }
+        },
+        "reviewer": {
+            "verdict": {
+                "valid_values": ["APPROVE", "REVISE", "REJECT"],
+            },
+            "security_score": {
+                "range": (0, 10),
+            },
+            "risks_if_reject": True,  # REJECT면 risks 있어야
+        },
+        "council": {
+            "score": {
+                "range": (0, 10),
+            },
+            "reasoning": {
+                "min_length": 20,
+            }
+        }
+    }
+
+    # 동사 패턴 (한글)
+    VERB_PATTERNS = [
+        r"수정", r"추가", r"삭제", r"변경", r"생성", r"구현", r"적용",
+        r"리팩토링", r"개선", r"업데이트", r"fix", r"add", r"remove",
+        r"update", r"create", r"implement", r"refactor"
+    ]
+
+    # 대상 패턴 (한글)
+    TARGET_PATTERNS = [
+        r"파일", r"함수", r"클래스", r"메서드", r"모듈", r"변수", r"상수",
+        r"API", r"엔드포인트", r"라우트", r"컴포넌트", r"테스트",
+        r"file", r"function", r"class", r"method", r"module", r"\.py",
+        r"\.js", r"\.ts", r"\.json"
+    ]
+
+    def __init__(self):
+        self._compiled_null_patterns = [
+            re.compile(p, re.IGNORECASE) for p in self.SEMANTIC_NULL_PATTERNS
+        ]
+        self._compiled_verb_patterns = [
+            re.compile(p, re.IGNORECASE) for p in self.VERB_PATTERNS
+        ]
+        self._compiled_target_patterns = [
+            re.compile(p, re.IGNORECASE) for p in self.TARGET_PATTERNS
+        ]
+
+    def validate(self, parsed_json: dict, profile: str) -> tuple[bool, str]:
+        """
+        의미 검증
+
+        Args:
+            parsed_json: 파싱된 JSON (형식 검증 통과한 것)
+            profile: 프로필 (coder, qa, reviewer, council)
+
+        Returns:
+            (valid, error_message)
+        """
+        # 1. 전체 텍스트에서 의미적 NULL 패턴 검사
+        full_text = json.dumps(parsed_json, ensure_ascii=False)
+        null_error = self._check_semantic_null(full_text)
+        if null_error:
+            return False, null_error
+
+        # 2. 프로필별 규칙 검사
+        rules = self.SEMANTIC_RULES.get(profile, {})
+        for field, field_rules in rules.items():
+            value = parsed_json.get(field)
+            field_error = self._check_field_rules(field, value, field_rules, parsed_json)
+            if field_error:
+                return False, field_error
+
+        return True, ""
+
+    def _check_semantic_null(self, text: str) -> Optional[str]:
+        """의미적 NULL 패턴 검사"""
+        for pattern in self._compiled_null_patterns:
+            if pattern.search(text):
+                return f"의미적 NULL 감지: '{pattern.pattern}' 패턴 발견. 구체적인 내용 필요"
+        return None
+
+    def _check_field_rules(
+        self,
+        field: str,
+        value: Any,
+        rules: dict,
+        full_json: dict
+    ) -> Optional[str]:
+        """필드별 규칙 검사"""
+
+        # min_length 검사
+        if "min_length" in rules:
+            if value is None or len(str(value)) < rules["min_length"]:
+                return f"'{field}' 필드 너무 짧음 (최소 {rules['min_length']}자)"
+
+        # require_verb 검사
+        if rules.get("require_verb") and value:
+            if not any(p.search(str(value)) for p in self._compiled_verb_patterns):
+                return f"'{field}' 필드에 동사 없음. 무엇을 했는지 명시 필요 (예: 수정, 추가, 삭제)"
+
+        # require_target 검사
+        if rules.get("require_target") and value:
+            if not any(p.search(str(value)) for p in self._compiled_target_patterns):
+                return f"'{field}' 필드에 대상 없음. 무엇을 변경했는지 명시 필요 (예: 파일, 함수, 클래스)"
+
+        # require_pattern 검사
+        if "require_pattern" in rules and value:
+            pattern = re.compile(rules["require_pattern"], re.MULTILINE)
+            if not pattern.search(str(value)):
+                return f"'{field}' 필드 형식 불일치. 예상 패턴: {rules['require_pattern']}"
+
+        # valid_values 검사
+        if "valid_values" in rules:
+            if value not in rules["valid_values"]:
+                return f"'{field}' 값 '{value}'이 유효하지 않음. 허용값: {rules['valid_values']}"
+
+        # range 검사
+        if "range" in rules:
+            min_val, max_val = rules["range"]
+            try:
+                num_val = float(value) if value is not None else None
+                if num_val is None or num_val < min_val or num_val > max_val:
+                    return f"'{field}' 값 {value}이 범위 밖. 허용범위: {min_val}-{max_val}"
+            except (TypeError, ValueError):
+                return f"'{field}' 값이 숫자가 아님: {value}"
+
+        # non_empty_if_diff 검사 (coder 전용)
+        if rules.get("non_empty_if_diff"):
+            diff = full_json.get("diff", "")
+            if diff and len(diff.strip()) > 0:
+                if not value or len(value) == 0:
+                    return f"'{field}' 필드가 비어있음. diff 있으면 변경된 파일 목록 필수"
+
+        # non_empty_if_pass 검사 (qa 전용)
+        if rules.get("non_empty_if_pass"):
+            verdict = full_json.get("verdict", "")
+            if verdict == "PASS":
+                if not value or len(value) == 0:
+                    return f"'{field}' 필드가 비어있음. PASS 판정이면 테스트 결과 필수"
+
+        # risks_if_reject 검사 (reviewer 전용)
+        if rules.get("risks_if_reject"):
+            verdict = full_json.get("verdict", "")
+            if verdict == "REJECT":
+                risks = full_json.get("risks", [])
+                if not risks or len(risks) == 0:
+                    return "REJECT 판정이면 risks 필드에 이유 필수"
+
+        return None
+
+    def get_error_type(self, error_msg: str) -> str:
+        """에러 메시지에서 에러 타입 추출"""
+        if "의미적 NULL" in error_msg:
+            return "SEMANTIC_NULL"
+        elif "너무 짧음" in error_msg:
+            return "FIELD_TOO_SHORT"
+        elif "동사 없음" in error_msg:
+            return "MISSING_VERB"
+        elif "대상 없음" in error_msg:
+            return "MISSING_TARGET"
+        elif "유효하지 않음" in error_msg:
+            return "INVALID_VALUE"
+        elif "범위 밖" in error_msg:
+            return "OUT_OF_RANGE"
+        elif "비어있음" in error_msg:
+            return "EMPTY_REQUIRED_FIELD"
+        else:
+            return "SEMANTIC_UNKNOWN"
+
+
+# 싱글톤 인스턴스
+_semantic_guard: Optional[SemanticGuard] = None
+
+
+def get_semantic_guard() -> SemanticGuard:
+    """SemanticGuard 싱글톤"""
+    global _semantic_guard
+    if _semantic_guard is None:
+        _semantic_guard = SemanticGuard()
+    return _semantic_guard
 
 
 # =============================================================================
@@ -140,6 +634,10 @@ class CLIResult:
     # v2.5: JSON 검증 관련
     parsed_json: Optional[dict] = None  # 파싱된 JSON (검증 통과 시)
     format_warning: Optional[str] = None  # JSON 검증 실패 경고
+    # v2.5.2: 에스컬레이션 관련
+    escalation_level: Optional[str] = None  # SELF_REPAIR, ROLE_SWITCH, HARD_FAIL
+    role_switched: bool = False  # 역할 전환 여부
+    original_profile: Optional[str] = None  # 원래 프로필 (전환 시)
 
 
 @dataclass
@@ -585,7 +1083,7 @@ class CLISupervisor:
         task_context: str = ""
     ) -> CLIResult:
         """
-        Claude Code CLI 호출
+        Claude Code CLI 호출 (v2.5.2: Retry Escalation 적용)
 
         Args:
             prompt: 사용자 프롬프트
@@ -598,44 +1096,154 @@ class CLISupervisor:
             CLIResult
         """
         self.retry_count = 0
+        original_prompt = prompt  # 에스컬레이션용 원본 저장
+        original_profile = profile
+        current_profile = profile
+        escalator = get_retry_escalator()
 
         # 프롬프트 구성
         full_prompt = self._build_prompt(prompt, system_prompt, profile, task_context)
 
         while self.retry_count <= self.config["max_retries"]:
             try:
-                result = self._execute_cli(full_prompt, profile)
+                result = self._execute_cli(full_prompt, current_profile)
 
                 # 성공
                 if result.success:
                     # v2.5: JSON 출력 검증
-                    is_valid, error_msg, parsed = self._validate_json_output(result.output, profile)
+                    is_valid, error_msg, parsed = self._validate_json_output(result.output, current_profile)
 
                     if is_valid:
-                        # 검증 통과 - 파싱된 JSON 메타데이터 추가
-                        result.parsed_json = parsed
-                        print(f"[CLI-Supervisor] JSON 검증 통과 (profile={profile})")
-                        return result
+                        # v2.5.3: JSON 형식 통과 → Semantic Guard 검증
+                        semantic_guard = get_semantic_guard()
+                        sem_valid, sem_error = semantic_guard.validate(parsed, current_profile)
+
+                        if sem_valid:
+                            # 형식 + 의미 모두 통과
+                            result.parsed_json = parsed
+                            print(f"[CLI-Supervisor] JSON + Semantic 검증 통과 (profile={current_profile})")
+
+                            # 역할 전환 메타데이터 추가
+                            if current_profile != original_profile:
+                                result.role_switched = True
+                                result.original_profile = original_profile
+
+                            # 성공 시 해당 프로필 히스토리 초기화
+                            escalator.clear_history(current_profile)
+                            return result
+                        else:
+                            # v2.5.3: Semantic 검증 실패 → RetryEscalator 편입
+                            sem_error_type = semantic_guard.get_error_type(sem_error)
+                            print(f"[CLI-Supervisor] Semantic 검증 실패: {sem_error}")
+
+                            signature = escalator.compute_signature(
+                                error_type=sem_error_type,
+                                missing_fields=[],
+                                profile=current_profile,
+                                prompt=full_prompt
+                            )
+
+                            level = escalator.record_failure(signature)
+                            action = escalator.get_escalation_action(
+                                level=level,
+                                current_profile=current_profile,
+                                original_prompt=original_prompt,
+                                error_message=sem_error
+                            )
+
+                            print(f"[CLI-Supervisor] Semantic 에스컬레이션: {level.name} -> {action['action']}")
+
+                            if action["action"] == "abort":
+                                return CLIResult(
+                                    success=False,
+                                    output=result.output,
+                                    error=sem_error,
+                                    aborted=True,
+                                    abort_reason=f"SEMANTIC_{sem_error_type}",
+                                    retry_count=self.retry_count,
+                                    escalation_level=level.name,
+                                    format_warning=sem_error
+                                )
+
+                            elif action["action"] == "switch":
+                                current_profile = action["new_profile"]
+                                full_prompt = self._build_prompt(
+                                    action["modified_prompt"],
+                                    system_prompt,
+                                    current_profile,
+                                    task_context
+                                )
+                                print(f"[CLI-Supervisor] Semantic 역할 전환: {original_profile} → {current_profile}")
+                                self.retry_count += 1
+                                continue
+
+                            else:  # retry
+                                full_prompt = self._build_prompt(
+                                    action["modified_prompt"],
+                                    system_prompt,
+                                    current_profile,
+                                    task_context
+                                )
+                                self.retry_count += 1
+                                continue
                     else:
-                        # JSON 검증 실패 - 재시도
-                        if self.retry_count < self.config["max_retries"]:
-                            print(f"[CLI-Supervisor] JSON 검증 실패: {error_msg}, 재시도 ({self.retry_count + 1}/{self.config['max_retries']})")
+                        # v2.5.2: JSON 검증 실패 - Retry Escalation 적용
+                        missing_fields = self._extract_missing_fields(error_msg)
+                        error_type = self._classify_error_type(error_msg)
 
-                            # 에러 피드백 포함하여 재시도
-                            retry_feedback = f"""이전 응답이 형식 오류로 거부되었습니다.
+                        signature = escalator.compute_signature(
+                            error_type=error_type,
+                            missing_fields=missing_fields,
+                            profile=current_profile,
+                            prompt=full_prompt
+                        )
 
-오류: {error_msg}
+                        level = escalator.record_failure(signature)
+                        action = escalator.get_escalation_action(
+                            level=level,
+                            current_profile=current_profile,
+                            original_prompt=original_prompt,
+                            error_message=error_msg
+                        )
 
-반드시 JSON만 출력하세요. 설명/인사 금지.
-JSON 외 출력 = 즉시 FAIL"""
-                            full_prompt = f"{full_prompt}\n\n[FORMAT_ERROR]\n{retry_feedback}\n[/FORMAT_ERROR]"
+                        print(f"[CLI-Supervisor] 에스컬레이션: {level.name} -> {action['action']}")
+
+                        if action["action"] == "abort":
+                            # Hard Fail - 즉시 중단
+                            return CLIResult(
+                                success=False,
+                                output=result.output,
+                                error=error_msg,
+                                aborted=True,
+                                abort_reason=action.get("error_type", "ESCALATION_HARD_FAIL"),
+                                retry_count=self.retry_count,
+                                escalation_level=level.name,
+                                format_warning=error_msg
+                            )
+
+                        elif action["action"] == "switch":
+                            # Role Switch - 다른 역할로 전환
+                            current_profile = action["new_profile"]
+                            full_prompt = self._build_prompt(
+                                action["modified_prompt"],
+                                system_prompt,
+                                current_profile,
+                                task_context
+                            )
+                            print(f"[CLI-Supervisor] 역할 전환: {original_profile} → {current_profile}")
                             self.retry_count += 1
                             continue
-                        else:
-                            # 재시도 초과 - 원본 반환 + 경고
-                            print(f"[CLI-Supervisor] JSON 검증 실패 (재시도 초과): {error_msg}")
-                            result.format_warning = error_msg
-                            return result
+
+                        else:  # retry (Self-repair)
+                            # 에러 피드백 포함 재시도 (변형된 프롬프트)
+                            full_prompt = self._build_prompt(
+                                action["modified_prompt"],
+                                system_prompt,
+                                current_profile,
+                                task_context
+                            )
+                            self.retry_count += 1
+                            continue
 
                 # ABORT 감지
                 if self._is_abort(result.output):
@@ -648,30 +1256,24 @@ JSON 외 출력 = 즉시 FAIL"""
                         retry_count=self.retry_count
                     )
 
-                # 컨텍스트 초과 감지
+                # 컨텍스트 초과 감지 - 에스컬레이션 없이 요약 후 재시도
                 if self._is_context_overflow(result.error or result.output):
-                    print(f"[CLI-Supervisor] 컨텍스트 초과 감지, 세션 리셋 + 요약 후 재시도 ({self.retry_count + 1}/{self.config['max_retries']})")
-
-                    # 세션 리셋 (새 UUID로 시작)
-                    self.reset_session(profile)
-
-                    # 컨텍스트 요약
+                    print(f"[CLI-Supervisor] 컨텍스트 초과 감지, 세션 리셋 + 요약 후 재시도")
+                    self.reset_session(current_profile)
                     summarized_prompt = self._summarize_context(full_prompt, session_id)
                     full_prompt = summarized_prompt
                     self.retry_count += 1
                     continue
 
-                # 세션 충돌 에러 (v2.4.2: 자동 리셋 후 재시도)
+                # 세션 충돌 에러 - 에스컬레이션 없이 리셋 후 재시도
                 if self._is_session_conflict(result.error or result.output or ""):
                     if self.retry_count < self.config["max_retries"]:
-                        print(f"[CLI-Supervisor] 세션 충돌 감지! 세션 리셋 후 재시도 ({self.retry_count + 1}/{self.config['max_retries']})")
-                        # 세션 강제 리셋 (새 UUID 생성)
-                        self.reset_session(profile)
+                        print(f"[CLI-Supervisor] 세션 충돌 감지! 세션 리셋 후 재시도")
+                        self.reset_session(current_profile)
                         self.retry_count += 1
                         time.sleep(1)
                         continue
                     else:
-                        # 재시도 횟수 초과 - 세션 충돌 에러 반환
                         return CLIResult(
                             success=False,
                             output="",
@@ -680,7 +1282,7 @@ JSON 외 출력 = 즉시 FAIL"""
                             abort_reason="SESSION_CONFLICT_MAX_RETRIES"
                         )
 
-                # 치명적 에러
+                # 치명적 에러 - 에스컬레이션 없이 즉시 실패
                 if self._is_fatal_error(result.error or ""):
                     return CLIResult(
                         success=False,
@@ -690,31 +1292,56 @@ JSON 외 출력 = 즉시 FAIL"""
                         abort_reason="FATAL_ERROR"
                     )
 
-                # 일반 에러 - 재시도
-                if self.retry_count < self.config["max_retries"]:
-                    print(f"[CLI-Supervisor] 에러 발생, 재시도 ({self.retry_count + 1}/{self.config['max_retries']})")
-                    self.retry_count += 1
-                    time.sleep(2)  # 2초 대기 후 재시도
-                    continue
-                else:
-                    return result
+                # 일반 에러 - Retry Escalation 적용
+                signature = escalator.compute_signature(
+                    error_type="GENERAL_ERROR",
+                    missing_fields=[],
+                    profile=current_profile,
+                    prompt=full_prompt
+                )
+                level = escalator.record_failure(signature)
+
+                if level == EscalationLevel.HARD_FAIL:
+                    return CLIResult(
+                        success=False,
+                        output=result.output,
+                        error=result.error or "반복 실패",
+                        aborted=True,
+                        abort_reason="ESCALATION_HARD_FAIL",
+                        escalation_level=level.name
+                    )
+
+                self.retry_count += 1
+                time.sleep(2)
+                continue
 
             except subprocess.TimeoutExpired:
                 print(f"[CLI-Supervisor] 타임아웃 ({self.config['timeout_seconds']}초)")
-                if self.retry_count < self.config["max_retries"]:
-                    # 타임아웃 시 태스크 분할 시도
-                    print("[CLI-Supervisor] 태스크 분할 시도...")
-                    full_prompt = self._split_task(full_prompt)
-                    self.retry_count += 1
-                    continue
-                else:
+
+                # 타임아웃도 에스컬레이션 적용
+                signature = escalator.compute_signature(
+                    error_type="TIMEOUT",
+                    missing_fields=[],
+                    profile=current_profile,
+                    prompt=full_prompt
+                )
+                level = escalator.record_failure(signature)
+
+                if level == EscalationLevel.HARD_FAIL:
                     return CLIResult(
                         success=False,
                         output="",
-                        error=f"타임아웃 ({self.config['timeout_seconds']}초)",
+                        error=f"타임아웃 반복 ({self.config['timeout_seconds']}초)",
                         aborted=True,
-                        abort_reason="TIMEOUT"
+                        abort_reason="TIMEOUT_HARD_FAIL",
+                        escalation_level=level.name
                     )
+
+                # 태스크 분할 후 재시도
+                print("[CLI-Supervisor] 태스크 분할 시도...")
+                full_prompt = self._split_task(full_prompt)
+                self.retry_count += 1
+                continue
 
             except Exception as e:
                 self.last_error = str(e)
@@ -734,6 +1361,29 @@ JSON 외 출력 = 즉시 FAIL"""
             aborted=True,
             abort_reason="MAX_RETRIES_EXCEEDED"
         )
+
+    def _extract_missing_fields(self, error_msg: str) -> List[str]:
+        """에러 메시지에서 누락된 필드 추출"""
+        # "필수 필드 누락: ['summary', 'files_changed']" 패턴 파싱
+        match = re.search(r"필수 필드 누락:\s*\[([^\]]+)\]", error_msg)
+        if match:
+            fields_str = match.group(1)
+            fields = [f.strip().strip("'\"") for f in fields_str.split(",")]
+            return fields
+        return []
+
+    def _classify_error_type(self, error_msg: str) -> str:
+        """에러 타입 분류"""
+        if "JSON 블록 없음" in error_msg:
+            return "NO_JSON_BLOCK"
+        elif "JSON 파싱 실패" in error_msg:
+            return "JSON_PARSE_ERROR"
+        elif "필수 필드 누락" in error_msg:
+            return "MISSING_FIELD"
+        elif "타임아웃" in error_msg or "timeout" in error_msg.lower():
+            return "TIMEOUT"
+        else:
+            return "UNKNOWN"
 
     def _execute_cli(self, prompt: str, profile: str) -> CLIResult:
         """실제 CLI 실행 (Popen으로 프로세스 추적)"""

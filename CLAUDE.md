@@ -1,7 +1,251 @@
-# Hattz Empire - AI Orchestration System (v2.4)
+# Hattz Empire - AI Orchestration System (v2.5.5)
 
 ## 프로젝트 개요
 비용 최적화 AI 팀 오케스트레이션 시스템. 비용 86% 절감 + 품질 유지 + JSONL 영속화.
+
+---
+
+## ESCALATE 운영 정책 (v2.5.5)
+
+### 상태 전이 그래프
+
+PM Decision Machine의 핵심은 **PMDecision 전이 규칙**이다.
+허용된 전이만 통과하고, 나머지는 FAIL 처리된다.
+
+```
+ALLOWED_TRANSITIONS:
+┌─────────────┬────────────────────────────────────────────┐
+│ From State  │ Allowed To States                          │
+├─────────────┼────────────────────────────────────────────┤
+│ DISPATCH    │ RETRY, DONE, BLOCKED                       │
+│ RETRY       │ DISPATCH, BLOCKED                          │
+│ BLOCKED     │ ESCALATE                                   │
+│ ESCALATE    │ DONE                                       │
+│ DONE        │ (terminal - 어디로도 전이 불가)            │
+└─────────────┴────────────────────────────────────────────┘
+
+금지된 전이 (바로가기 금지):
+- DISPATCH → ESCALATE ❌  (BLOCKED 경유 필수)
+- DONE → RETRY ❌         (완료 후 재시도 불가)
+- RETRY → ESCALATE ❌     (BLOCKED 경유 필수)
+- BLOCKED → DISPATCH ❌   (ESCALATE로만 가능)
+```
+
+### 표준 경로
+
+```
+행복 경로: DISPATCH → DONE
+재시도 경로: DISPATCH → RETRY → DISPATCH → DONE
+에스컬레이션 경로: DISPATCH → BLOCKED → ESCALATE → DONE
+```
+
+### Retry Escalation 불변조건
+
+| 원칙 | 설명 |
+|------|------|
+| **Monotonic** | 에스컬레이션 레벨은 절대 감소하지 않음 (SELF_REPAIR → ROLE_SWITCH → HARD_FAIL) |
+| **Terminal** | HARD_FAIL은 시스템 종료점. 이후 모든 실패는 HARD_FAIL 유지 |
+| **Once** | ROLE_SWITCH는 프로필당 1회만 허용. 2회 시도 시 즉시 abort |
+
+### 에스컬레이션 트리거 조건
+
+```
+EscalationReason 자동 감지:
+- DEPLOY: 배포, production, 릴리즈
+- API_KEY: api key, 토큰, credential
+- PAYMENT: 결제, billing, 비용
+- DATA_DELETE: 삭제, delete, drop, truncate
+- DEPENDENCY: pip install, npm install
+- SECURITY: 보안, auth, 권한
+```
+
+### CEO 개입이 필요한 경우
+
+1. **HARD_FAIL 도달**: 동일 에러 3회 반복 (self-repair + role-switch 모두 실패)
+2. **BLOCKED → ESCALATE**: 정보 부족, 모순된 요구사항, 권한 필요
+3. **EscalationReason 감지**: 배포/결제/보안 등 민감 작업
+
+### 코드 참조
+
+```python
+# src/core/decision_machine.py
+ALLOWED_TRANSITIONS = {
+    PMDecision.DISPATCH: {PMDecision.RETRY, PMDecision.DONE, PMDecision.BLOCKED},
+    PMDecision.RETRY: {PMDecision.DISPATCH, PMDecision.BLOCKED},
+    PMDecision.BLOCKED: {PMDecision.ESCALATE},
+    PMDecision.ESCALATE: {PMDecision.DONE},
+    PMDecision.DONE: set(),  # Terminal state
+}
+
+# src/services/cli_supervisor.py
+EscalationLevel:
+- SELF_REPAIR (count=1): 에러 피드백 포함 재시도
+- ROLE_SWITCH (count=2): 다른 역할로 전환 (1회 제한)
+- HARD_FAIL (count≥3): CEO 에스컬레이션
+```
+
+---
+
+## v2.5.5 아키텍처 (2026-01-07)
+
+**핵심 변경**: RAG Agent Filter + 에이전트별 컨텍스트 주입
+
+### v2.5.5 신규 변경사항
+
+1. **RAG Agent Filter**: 에이전트별 임베딩 검색 필터링
+   - `search(agent_filter=...)`: 특정 에이전트 임베딩만 검색
+   - `search_by_agent(agent, ...)`: 에이전트별 검색 헬퍼 함수
+   - `build_context(agent_filter=..., session_id=...)`: 에이전트별 컨텍스트 빌드
+
+2. **index_document() agent 컬럼 저장 수정**
+   - 기존: metadata에 agent 있어도 embeddings.agent 컬럼에 저장 안 됨
+   - 수정: `agent` 파라미터 추가, metadata에서도 자동 추출
+
+3. **에이전트별 RAG 컨텍스트 주입** (`llm_caller.py`)
+   - PM: 전체 검색 (top_k=5)
+   - Coder/QA/Strategist/Researcher: 에이전트별 필터 (top_k=3)
+   - `RAG_ENABLED_AGENTS = ["pm", "coder", "qa", "strategist", "researcher"]`
+
+### RAG Agent Filter 흐름
+```
+메시지 저장 (database.add_message)
+    │
+    ├─ agent 파라미터 전달 → embedding_queue.enqueue_message()
+    │                           │
+    │                           └─ EmbeddingTask.metadata["agent"]
+    │
+    └─ 임베딩 워커 처리 → rag.index_document(agent=...)
+                              │
+                              └─ embeddings.agent 컬럼에 저장 ✅
+
+LLM 호출 (call_agent)
+    │
+    ├─ PM → rag.build_context(agent_filter=None, top_k=5)
+    │           └─ 전체 임베딩 검색
+    │
+    └─ Coder/QA/... → rag.build_context(agent_filter="coder", top_k=3)
+                          └─ WHERE agent = 'coder' 필터링
+```
+
+### RAG 함수 시그니처 (v2.5.5)
+```python
+# 검색
+search(
+    query: str,
+    project: Optional[str] = None,
+    top_k: int = 5,
+    agent_filter: Optional[str] = None  # NEW
+) -> List[Dict]
+
+# 에이전트별 검색 헬퍼
+search_by_agent(
+    agent: str,
+    query: str,
+    project: Optional[str] = None,
+    top_k: int = 3
+) -> List[Dict]
+
+# 컨텍스트 빌드
+build_context(
+    query: str,
+    project: Optional[str] = None,
+    agent_filter: Optional[str] = None,  # NEW
+    top_k: int = 5,
+    use_gemini: bool = True,
+    language: str = "en",
+    session_id: Optional[str] = None  # NEW
+) -> str
+
+# 인덱싱
+index_document(
+    source_type: str,
+    source_id: str,
+    content: str,
+    metadata: Dict[str, Any] = None,
+    project: Optional[str] = None,
+    source: str = "web",
+    agent: Optional[str] = None  # NEW - metadata["agent"]에서도 자동 추출
+) -> str
+```
+
+---
+
+## v2.5.4 아키텍처 (2026-01-07)
+
+**핵심 변경**: PM Decision Machine + Semantic Guard + Retry Escalation
+
+### v2.5.4 신규 변경사항
+
+1. **PM Decision Machine**: summary → enum 변환 (인간 흉내 제거)
+   - PM JSON → `DecisionOutput` 정형화
+   - `PMDecision` enum: DISPATCH, ESCALATE, DONE, BLOCKED, RETRY
+   - summary는 로그용, 의사결정에 사용 금지
+   - 의미 없는 summary → confidence 감소 (0.5)
+
+2. **CLI Semantic Guard** (v2.5.3): 코드 기반 의미 검증
+   - 의미적 NULL 패턴 블랙리스트
+   - 프로필별 필드 규칙
+
+3. **Retry Escalation 시스템** (v2.5.2): 동일 실패 반복 방지
+   - 3단계 에스컬레이션: Self-repair → Role-switch → Hard Fail
+
+### PM Decision Machine 흐름
+```
+PM JSON 출력 → DecisionMachine.process()
+    │
+    ├─ action: "DISPATCH" → PMDecision.DISPATCH + targets 추출
+    ├─ action: "ESCALATE" → PMDecision.ESCALATE + reason 자동 추론
+    ├─ action: "DONE" → PMDecision.DONE
+    └─ tasks 없음 → PMDecision.BLOCKED
+
+summary 검증:
+    ├─ "검토했습니다", "진행하겠습니다" 등 → confidence = 0.5
+    └─ 유효한 내용 → confidence = 1.0
+```
+
+### Decision Enums
+```python
+PMDecision:     DISPATCH | ESCALATE | DONE | BLOCKED | RETRY
+EscalationReason: deploy | api_key | payment | data_delete | dependency | security
+```
+
+### Semantic Guard 검사 항목
+```
+의미적 NULL 블랙리스트:
+- 한글: 검토했습니다, 확인했습니다, 문제없습니다, 진행하겠습니다
+- 영어: looks good, no issues, seems fine, I have reviewed
+
+프로필별 규칙:
+- coder: summary(10자+동사+대상), diff(20자+형식), files_changed(필수)
+- qa: verdict(PASS/FAIL/SKIP), tests(PASS시 필수)
+- reviewer: verdict(APPROVE/REVISE/REJECT), score(0-10), risks(REJECT시 필수)
+- council: score(0-10), reasoning(20자 이상)
+```
+
+### Semantic + Retry 통합 흐름
+```
+LLM 응답 → JSON 파싱 → Semantic Guard
+    │                        │
+    │                        ├─ 의미적 NULL? → SEMANTIC_NULL 에러
+    │                        ├─ 필드 규칙 위반? → FIELD_TOO_SHORT, INVALID_VALUE 등
+    │                        └─ 통과 → 성공 반환
+    │
+    └─ JSON 파싱 실패 → JSON_PARSE_ERROR
+                            │
+                            └─→ RetryEscalator 편입
+                                    │
+                                    ├─ count=1 → SELF_REPAIR
+                                    ├─ count=2 → ROLE_SWITCH
+                                    └─ count≥3 → HARD_FAIL
+```
+
+### Escalation API
+```
+GET  /api/monitor/escalation       - 에스컬레이션 상태 조회
+POST /api/monitor/escalation/clear - 히스토리 초기화
+```
+
+---
 
 ## v2.4 아키텍처 (2026-01-07)
 
@@ -260,6 +504,68 @@ hattz_empire/
 - DB에 작업 이력 저장
 
 ## 최근 작업 내역
+
+### 세션 10 (2026-01-07) - v2.5.5 RAG Agent Filter
+
+에이전트별 RAG 검색 필터링 및 컨텍스트 주입 시스템 구현:
+
+1. **RAG Agent Filter 구현** (`src/services/rag.py`)
+   - `search()`: `agent_filter` 파라미터 추가
+   - `search_by_agent()`: 에이전트별 검색 헬퍼 함수 신설
+   - `build_context()`: `agent_filter`, `session_id` 파라미터 추가
+
+2. **index_document() agent 컬럼 버그 수정**
+   - 버그: `metadata["agent"]`가 있어도 `embeddings.agent` 컬럼에 저장 안 됨
+   - 원인: INSERT문에 agent 컬럼 누락
+   - 수정: `agent` 파라미터 추가 + metadata에서 자동 추출 + INSERT에 agent 포함
+
+3. **embedding_queue.py 수정**
+   - `_process_task()`: `agent=task.metadata.get("agent")` 전달
+
+4. **llm_caller.py 에이전트별 RAG 주입**
+   - `RAG_ENABLED_AGENTS`: pm, coder, qa, strategist, researcher
+   - PM: 전체 검색 (agent_filter=None, top_k=5)
+   - 나머지: 에이전트별 필터 (agent_filter=role, top_k=3)
+
+5. **QA 테스트 결과** (5/5 통과)
+   - index_document() - agent parameter ✅
+   - search() - agent_filter ✅
+   - search_by_agent() helper ✅
+   - build_context() - agent_filter ✅
+   - agent extraction from metadata ✅
+
+---
+
+### 세션 9 (2026-01-07) - v2.5.2 Retry Escalation 시스템
+
+동일 실패 반복 방지를 위한 에스컬레이션 시스템 구현:
+
+1. **Retry Escalation 핵심 클래스** (`src/services/cli_supervisor.py`)
+   - `FailureSignature`: 실패 시그니처 (error_type, missing_fields, profile, prompt_hash)
+   - `EscalationLevel`: SELF_REPAIR → ROLE_SWITCH → HARD_FAIL
+   - `RetryEscalator`: 실패 히스토리 관리 + 에스컬레이션 결정
+
+2. **에스컬레이션 로직**
+   - 같은 시그니처 1번: Self-repair (에러 피드백 포함 재시도)
+   - 같은 시그니처 2번: Role-switch (coder→reviewer 등 역할 전환)
+   - 같은 시그니처 3번+: Hard Fail (즉시 중단, PM 에스컬레이션)
+
+3. **call_cli() 개선**
+   - 기존 단순 재시도 로직 → 에스컬레이션 기반 재시도
+   - JSON 검증 실패 시 시그니처 기반 에스컬레이션
+   - 타임아웃/일반 에러도 에스컬레이션 적용
+   - 역할 전환 시 메타데이터 기록 (role_switched, original_profile)
+
+4. **모니터링 API** (`src/api/monitor.py`)
+   - `GET /api/monitor/escalation`: 에스컬레이션 상태 조회
+   - `POST /api/monitor/escalation/clear`: 히스토리 초기화
+
+5. **CLIResult 확장**
+   - `escalation_level`: 에스컬레이션 레벨
+   - `role_switched`: 역할 전환 여부
+   - `original_profile`: 원래 프로필
+
+---
 
 ### 세션 8-1 (2026-01-07) - v2.4.1 Analyst 파일 컨텍스트 주입
 
