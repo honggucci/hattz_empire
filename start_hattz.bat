@@ -9,14 +9,17 @@ echo.
 
 cd /d "%~dp0"
 
-echo [1/2] Starting Flask Server...
-start "Hattz Flask" cmd /k "cd /d %~dp0 && python app.py"
+:: logs 폴더 생성
+if not exist logs mkdir logs
+
+echo [1/2] Starting Flask Server (background)...
+start /B "" python app.py > logs\flask.log 2>&1
 
 echo [2/2] Waiting for Flask to initialize...
 timeout /t 3 /nobreak >nul
 
-echo [2/2] Starting ngrok Tunnel...
-start "Hattz ngrok" cmd /k "ngrok http 5000 --url=caitlyn-supercivilized-intrudingly.ngrok-free.app"
+echo [2/2] Starting ngrok Tunnel (background)...
+start /B "" ngrok http 5000 --domain=caitlyn-supercivilized-intrudingly.ngrok-free.app > logs\ngrok.log 2>&1
 
 echo.
 echo ============================================

@@ -27,6 +27,7 @@ from enum import Enum
 from typing import Optional, Dict, Any, List
 import re
 import os
+from src.services import cost_tracker
 
 
 class TaskType(Enum):
@@ -251,10 +252,10 @@ class HattzRouter:
         history: list = None
     ) -> RoutingDecision:
         """
-        메시지 + 역할 기반 라우팅 (v2.1)
+        메시지 + 역할 기반 라우팅 (v2.4.4)
 
-        우선순위 (v2.1 - 키워드만으로 VIP 태우지 않는다):
-        0. CEO 프리픽스 (최고/, 검색/, 생각/) → 강제 라우팅
+        우선순위:
+        0. PM → SAFETY (Opus 4.5) 무조건 고정 (v2.4.4)
         1. 고위험 키워드 → SAFETY (security 에이전트)
         2. 검색 키워드 → RESEARCH (Perplexity)
         3. 실행 의도/코드 감지 → EXEC (Claude Code CLI)
@@ -271,6 +272,16 @@ class HattzRouter:
         """
         msg = (message or "").strip()
         msg_lower = msg.lower()
+
+        # 0. PM은 무조건 Opus 4.5 (v2.4.4 - PM 고정)
+        #    PM은 "뇌"이므로 키워드/실행의도 체크 건너뛰고 바로 SAFETY 티어
+        if agent_role == "pm":
+            return self._create_decision(
+                self.VIP_AUDIT_MODEL,
+                "pm_fixed → SAFETY (Opus 4.5)",
+                context_size,
+                escalate_to=None
+            )
 
         # 1. 고위험 체크 → SAFETY 강제
         if self._is_high_risk(msg_lower):
@@ -437,20 +448,22 @@ class HattzRouter:
         self,
         routing: RoutingDecision,
         messages: list,
-        system_prompt: str
+        system_prompt: str,
+        session_id: str = None,
+        agent_role: str = None
     ) -> str:
         """라우팅 결정에 따라 모델 호출"""
         spec = routing.model_spec
 
         try:
             if spec.provider == "anthropic":
-                return self._call_anthropic(spec, messages, system_prompt)
+                return self._call_anthropic(spec, messages, system_prompt, session_id, agent_role)
             elif spec.provider == "openai":
-                return self._call_openai(spec, messages, system_prompt)
+                return self._call_openai(spec, messages, system_prompt, session_id, agent_role)
             elif spec.provider == "google":
-                return self._call_google(spec, messages, system_prompt)
+                return self._call_google(spec, messages, system_prompt, session_id, agent_role)
             elif spec.provider == "perplexity":
-                return self._call_perplexity(spec, messages, system_prompt)
+                return self._call_perplexity(spec, messages, system_prompt, session_id, agent_role)
             else:
                 return f"[Error] Unknown provider: {spec.provider}"
 
@@ -467,11 +480,11 @@ class HattzRouter:
                     estimated_tokens=routing.estimated_tokens,
                     estimated_cost=0
                 )
-                return self.call_model(fallback_routing, messages, system_prompt)
+                return self.call_model(fallback_routing, messages, system_prompt, session_id, agent_role)
 
             return f"[Error] {spec.provider}: {str(e)}"
 
-    def _call_anthropic(self, spec: ModelSpec, messages: list, system_prompt: str) -> str:
+    def _call_anthropic(self, spec: ModelSpec, messages: list, system_prompt: str, session_id: str = None, agent_role: str = None) -> str:
         """Anthropic API → CLI 리다이렉트 (v2.4.3 - API 비용 0원)"""
         from src.services.cli_supervisor import call_claude_cli
 
@@ -480,8 +493,8 @@ class HattzRouter:
 
         return call_claude_cli(messages, system_prompt, profile)
 
-    def _call_openai(self, spec: ModelSpec, messages: list, system_prompt: str) -> str:
-        """OpenAI API 호출"""
+    def _call_openai(self, spec: ModelSpec, messages: list, system_prompt: str, session_id: str = None, agent_role: str = None) -> str:
+        """OpenAI API 호출 + 비용 기록"""
         import openai
         client = openai.OpenAI(api_key=os.getenv(spec.api_key_env))
 
@@ -498,10 +511,26 @@ class HattzRouter:
             temperature=spec.temperature,
             messages=full_messages
         )
+
+        # 비용 기록
+        usage = response.usage
+        if usage:
+            try:
+                cost_tracker.record_api_call(
+                    session_id=session_id or "router",
+                    agent_role=agent_role or "router",
+                    model_id=spec.model_id,
+                    input_tokens=usage.prompt_tokens,
+                    output_tokens=usage.completion_tokens
+                )
+                print(f"[CostTracker] Router recorded: {spec.model_id} ({usage.prompt_tokens}in/{usage.completion_tokens}out)")
+            except Exception as e:
+                print(f"[CostTracker] Router failed to record: {e}")
+
         return response.choices[0].message.content
 
-    def _call_google(self, spec: ModelSpec, messages: list, system_prompt: str) -> str:
-        """Google Gemini API 호출"""
+    def _call_google(self, spec: ModelSpec, messages: list, system_prompt: str, session_id: str = None, agent_role: str = None) -> str:
+        """Google Gemini API 호출 + 비용 기록"""
         import google.generativeai as genai
         genai.configure(api_key=os.getenv(spec.api_key_env))
 
@@ -518,10 +547,28 @@ class HattzRouter:
 
         chat = model.start_chat(history=history)
         response = chat.send_message(messages[-1]["content"])
+
+        # 비용 기록
+        if hasattr(response, 'usage_metadata'):
+            input_tokens = getattr(response.usage_metadata, 'prompt_token_count', 0) or 0
+            output_tokens = getattr(response.usage_metadata, 'candidates_token_count', 0) or 0
+            if input_tokens > 0 or output_tokens > 0:
+                try:
+                    cost_tracker.record_api_call(
+                        session_id=session_id or "router",
+                        agent_role=agent_role or "router",
+                        model_id=spec.model_id,
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens
+                    )
+                    print(f"[CostTracker] Router recorded: {spec.model_id} ({input_tokens}in/{output_tokens}out)")
+                except Exception as e:
+                    print(f"[CostTracker] Router failed to record: {e}")
+
         return response.text
 
-    def _call_perplexity(self, spec: ModelSpec, messages: list, system_prompt: str) -> str:
-        """Perplexity API 호출 (실시간 검색)"""
+    def _call_perplexity(self, spec: ModelSpec, messages: list, system_prompt: str, session_id: str = None, agent_role: str = None) -> str:
+        """Perplexity API 호출 (실시간 검색) + 비용 기록"""
         import requests
 
         api_key = os.getenv(spec.api_key_env)
@@ -566,6 +613,23 @@ class HattzRouter:
         if response.status_code == 200:
             data = response.json()
             content = data["choices"][0]["message"]["content"]
+
+            # 비용 기록
+            usage = data.get("usage", {})
+            if usage:
+                input_tokens = usage.get("prompt_tokens", 0)
+                output_tokens = usage.get("completion_tokens", 0)
+                try:
+                    cost_tracker.record_api_call(
+                        session_id=session_id or "router",
+                        agent_role=agent_role or "router",
+                        model_id=spec.model_id,
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens
+                    )
+                    print(f"[CostTracker] Router recorded: {spec.model_id} ({input_tokens}in/{output_tokens}out)")
+                except Exception as e:
+                    print(f"[CostTracker] Router failed to record: {e}")
 
             # 인용 정보 추가
             citations = data.get("citations", [])

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Hattz Empire - Agent Monitor v2.2.1</title>
+    <title>Hattz Empire - Agent Monitor v2.6</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <style>
@@ -18,7 +18,6 @@
             overflow-y: auto;
         }
 
-        /* 전체 컨테이너 */
         .monitor-wrapper {
             max-width: 1600px;
             margin: 0 auto;
@@ -332,229 +331,6 @@
             color: #888;
         }
 
-        /* Docker Container Styles */
-        .docker-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-            gap: 12px;
-        }
-
-        .container-card {
-            background: #1a1a24;
-            border: 1px solid #2a2a3a;
-            border-radius: 8px;
-            padding: 15px;
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-        }
-
-        .container-card.running {
-            border-left: 3px solid #00ff88;
-        }
-
-        .container-card.stopped {
-            border-left: 3px solid #ff4444;
-            opacity: 0.6;
-        }
-
-        .container-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-
-        .container-name {
-            font-weight: 600;
-            font-size: 0.95rem;
-        }
-
-        .container-name.web { color: #00ff88; }
-        .container-name.pm { color: #00aaff; }
-        .container-name.coder { color: #ff6b6b; }
-        .container-name.qa { color: #ffd93d; }
-        .container-name.reviewer { color: #9b59b6; }
-
-        .container-status {
-            padding: 2px 8px;
-            border-radius: 4px;
-            font-size: 0.7rem;
-            text-transform: uppercase;
-        }
-
-        .container-status.running {
-            background: #00ff8833;
-            color: #00ff88;
-        }
-
-        .container-status.stopped {
-            background: #ff444433;
-            color: #ff4444;
-        }
-
-        .container-status.healthy {
-            background: #00aaff33;
-            color: #00aaff;
-        }
-
-        .container-info {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 4px;
-            font-size: 0.8rem;
-            color: #888;
-        }
-
-        .container-info span {
-            display: flex;
-            align-items: center;
-            gap: 4px;
-        }
-
-        .container-info .label {
-            color: #666;
-        }
-
-        .container-info .value {
-            color: #aaa;
-        }
-
-        /* Pipeline Styles */
-        .pipeline-flow {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            padding: 15px;
-            background: #1a1a24;
-            border-radius: 8px;
-            overflow-x: auto;
-            margin-bottom: 15px;
-        }
-
-        .pipeline-stage {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            min-width: 80px;
-        }
-
-        .pipeline-stage .icon {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 1.2rem;
-            margin-bottom: 5px;
-            border: 2px solid #2a2a3a;
-        }
-
-        .pipeline-stage.active .icon {
-            border-color: #00ff88;
-            animation: pulse 1.5s infinite;
-        }
-
-        .pipeline-stage.completed .icon {
-            border-color: #00aaff;
-            background: #00aaff22;
-        }
-
-        .pipeline-stage .name {
-            font-size: 0.75rem;
-            color: #888;
-        }
-
-        .pipeline-stage .count {
-            font-size: 0.7rem;
-            color: #00ff88;
-        }
-
-        .pipeline-arrow {
-            color: #444;
-            font-size: 1.2rem;
-        }
-
-        .job-item {
-            background: #1a1a24;
-            border: 1px solid #2a2a3a;
-            border-radius: 6px;
-            padding: 12px 15px;
-            display: grid;
-            grid-template-columns: auto 80px 1fr auto auto;
-            gap: 12px;
-            align-items: center;
-        }
-
-        .job-item.pending {
-            border-left: 3px solid #888;
-        }
-
-        .job-item.in_progress {
-            border-left: 3px solid #00ff88;
-            animation: pulse 2s infinite;
-        }
-
-        .job-item.completed {
-            border-left: 3px solid #00aaff;
-        }
-
-        .job-item.failed {
-            border-left: 3px solid #ff4444;
-        }
-
-        .job-id {
-            font-family: monospace;
-            font-size: 0.8rem;
-            color: #666;
-        }
-
-        .job-role {
-            font-weight: 600;
-            text-transform: uppercase;
-            font-size: 0.85rem;
-        }
-
-        .job-role.pm { color: #00aaff; }
-        .job-role.coder { color: #ff6b6b; }
-        .job-role.qa { color: #ffd93d; }
-        .job-role.reviewer { color: #9b59b6; }
-
-        .job-prompt {
-            color: #aaa;
-            font-size: 0.85rem;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }
-
-        .job-verdict {
-            padding: 2px 8px;
-            border-radius: 4px;
-            font-size: 0.7rem;
-            text-transform: uppercase;
-        }
-
-        .job-verdict.approve, .job-verdict.ship {
-            background: #00ff8833;
-            color: #00ff88;
-        }
-
-        .job-verdict.revise, .job-verdict.hold {
-            background: #ffaa0033;
-            color: #ffaa00;
-        }
-
-        .job-verdict.reject {
-            background: #ff444433;
-            color: #ff4444;
-        }
-
-        .job-rework {
-            font-size: 0.75rem;
-            color: #ffaa00;
-        }
-
         /* Tab Navigation */
         .tab-nav {
             display: flex;
@@ -594,149 +370,145 @@
         .tab-content.active {
             display: block;
         }
+
+        /* CLI Queue Styles */
+        .cli-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+        }
+
+        .cli-stat {
+            background: #1a1a24;
+            border: 1px solid #2a2a3a;
+            border-radius: 6px;
+            padding: 15px;
+        }
+
+        .cli-stat .label {
+            font-size: 0.8rem;
+            color: #888;
+            margin-bottom: 5px;
+        }
+
+        .cli-stat .value {
+            font-size: 1.3rem;
+            font-weight: 600;
+            color: #00ff88;
+        }
+
+        .cli-stat .value.warning { color: #ffaa00; }
+        .cli-stat .value.error { color: #ff4444; }
     </style>
 </head>
 <body class="page-monitor">
     <div class="monitor-wrapper">
     <div class="monitor-header">
-        <h1>Agent Monitor v2.2.1</h1>
+        <h1>Agent Monitor v2.6</h1>
         <div>
-            <span class="refresh-info">자동 갱신: 2초</span>
-            <a href="/chat">← 채팅으로 돌아가기</a>
+            <span class="refresh-info">Auto refresh: 2s</span>
+            <a href="/chat">Back to Chat</a>
         </div>
     </div>
 
     <!-- Stats Row -->
     <div class="stats-row">
         <div class="stat-card">
-            <h3>Docker 컨테이너</h3>
-            <div class="stat-value" id="docker-count">0/9</div>
+            <h3>CLI Queue</h3>
+            <div class="stat-value" id="cli-queue">0</div>
         </div>
         <div class="stat-card">
-            <h3>파이프라인 대기</h3>
-            <div class="stat-value" id="pipeline-pending">0</div>
+            <h3>Active Agents</h3>
+            <div class="stat-value" id="active-agents">0</div>
         </div>
         <div class="stat-card">
-            <h3>파이프라인 완료</h3>
-            <div class="stat-value" id="pipeline-completed">0</div>
-        </div>
-        <div class="stat-card">
-            <h3>임베딩 큐</h3>
+            <h3>Embedding Queue</h3>
             <div class="stat-value" id="embedding-queue">-</div>
+        </div>
+        <div class="stat-card">
+            <h3>Flask Processes</h3>
+            <div class="stat-value" id="flask-processes">1</div>
         </div>
     </div>
 
     <!-- Tab Navigation -->
     <div class="tab-nav">
-        <button class="tab-btn active" onclick="switchTab('docker')">🐳 Docker</button>
-        <button class="tab-btn" onclick="switchTab('pipeline')">⚡ Pipeline</button>
-        <button class="tab-btn" onclick="switchTab('agents')">🤖 Agents</button>
-        <button class="tab-btn" onclick="switchTab('process')">🖥️ Process</button>
-    </div>
-
-    <!-- Docker Tab -->
-    <div id="tab-docker" class="tab-content active">
-        <div class="section">
-            <h2>
-                Docker 컨테이너
-                <span class="count" id="docker-running-count">0</span>
-            </h2>
-            <div class="docker-grid" id="docker-grid">
-                <div class="empty-state">Docker 정보 로딩 중...</div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Pipeline Tab -->
-    <div id="tab-pipeline" class="tab-content">
-        <div class="section">
-            <h2>파이프라인 흐름</h2>
-            <div class="pipeline-flow" id="pipeline-flow">
-                <div class="pipeline-stage">
-                    <div class="icon">👤</div>
-                    <div class="name">CEO</div>
-                </div>
-                <div class="pipeline-arrow">→</div>
-                <div class="pipeline-stage" id="stage-pm">
-                    <div class="icon">📋</div>
-                    <div class="name">PM</div>
-                    <div class="count">0</div>
-                </div>
-                <div class="pipeline-arrow">→</div>
-                <div class="pipeline-stage" id="stage-coder">
-                    <div class="icon">💻</div>
-                    <div class="name">Coder</div>
-                    <div class="count">0</div>
-                </div>
-                <div class="pipeline-arrow">→</div>
-                <div class="pipeline-stage" id="stage-qa">
-                    <div class="icon">🧪</div>
-                    <div class="name">QA</div>
-                    <div class="count">0</div>
-                </div>
-                <div class="pipeline-arrow">→</div>
-                <div class="pipeline-stage" id="stage-reviewer">
-                    <div class="icon">🔒</div>
-                    <div class="name">Reviewer</div>
-                    <div class="count">0</div>
-                </div>
-                <div class="pipeline-arrow">→</div>
-                <div class="pipeline-stage">
-                    <div class="icon">🚀</div>
-                    <div class="name">SHIP</div>
-                </div>
-            </div>
-        </div>
-
-        <div class="section">
-            <h2>
-                대기 중인 작업
-                <span class="count" id="pending-job-count">0</span>
-            </h2>
-            <div class="task-list" id="pending-jobs">
-                <div class="empty-state">대기 중인 작업이 없습니다</div>
-            </div>
-        </div>
-
-        <div class="section">
-            <h2>
-                완료된 작업
-                <span class="count" id="completed-job-count">0</span>
-            </h2>
-            <div class="task-list" id="completed-jobs">
-                <div class="empty-state">완료된 작업이 없습니다</div>
-            </div>
-        </div>
+        <button class="tab-btn active" onclick="switchTab('agents')">Agents</button>
+        <button class="tab-btn" onclick="switchTab('cli')">CLI Queue</button>
+        <button class="tab-btn" onclick="switchTab('process')">Processes</button>
     </div>
 
     <!-- Agents Tab -->
-    <div id="tab-agents" class="tab-content">
+    <div id="tab-agents" class="tab-content active">
         <div class="section">
-            <h2>에이전트 상태</h2>
+            <h2>Agent Status</h2>
             <div class="agents-grid" id="agents-grid">
-                <!-- 동적으로 채워짐 -->
+                <!-- Dynamic -->
             </div>
         </div>
 
         <!-- Active Tasks -->
         <div class="section">
             <h2>
-                실행 중인 작업
+                Running Tasks
                 <span class="count" id="active-task-count">0</span>
             </h2>
             <div class="task-list" id="active-tasks">
-                <div class="empty-state">실행 중인 작업이 없습니다</div>
+                <div class="empty-state">No active tasks</div>
             </div>
         </div>
 
         <!-- Recent Completed -->
         <div class="section">
             <h2>
-                최근 완료된 작업
+                Recent Completed
                 <span class="count" id="completed-task-count">0</span>
             </h2>
             <div class="task-list" id="completed-tasks">
-                <div class="empty-state">완료된 작업이 없습니다</div>
+                <div class="empty-state">No completed tasks</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- CLI Queue Tab -->
+    <div id="tab-cli" class="tab-content">
+        <div class="section">
+            <h2>CLI Queue Status</h2>
+            <div class="cli-grid" id="cli-stats">
+                <div class="cli-stat">
+                    <div class="label">Queue Size</div>
+                    <div class="value" id="cli-queue-size">0</div>
+                </div>
+                <div class="cli-stat">
+                    <div class="label">Active Processes</div>
+                    <div class="value" id="cli-active">0</div>
+                </div>
+                <div class="cli-stat">
+                    <div class="label">Rate Limit Available</div>
+                    <div class="value" id="cli-rate-limit">-</div>
+                </div>
+                <div class="cli-stat">
+                    <div class="label">Max Concurrent</div>
+                    <div class="value" id="cli-max-concurrent">-</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>Health</h2>
+            <div class="cli-grid" id="cli-health">
+                <div class="cli-stat">
+                    <div class="label">Queue Healthy</div>
+                    <div class="value" id="health-queue">-</div>
+                </div>
+                <div class="cli-stat">
+                    <div class="label">Rate Limit OK</div>
+                    <div class="value" id="health-rate">-</div>
+                </div>
+                <div class="cli-stat">
+                    <div class="label">No Zombies</div>
+                    <div class="value" id="health-zombie">-</div>
+                </div>
             </div>
         </div>
     </div>
@@ -745,22 +517,22 @@
     <div id="tab-process" class="tab-content">
         <div class="section">
             <h2>
-                Python 프로세스 모니터
+                Python Processes
                 <span class="count" id="process-total-count">0</span>
             </h2>
             <div class="process-info">
-                <span>현재 Flask PID: <strong id="current-pid">-</strong></span>
-                <span style="margin-left: 20px;">Flask 프로세스: <strong id="flask-count">-</strong>개</span>
-                <span id="process-warning" class="process-warning" style="display: none;">⚠️ 여러 Flask 프로세스가 실행 중입니다!</span>
+                <span>Current Flask PID: <strong id="current-pid">-</strong></span>
+                <span style="margin-left: 20px;">Flask Processes: <strong id="flask-count">-</strong></span>
+                <span id="process-warning" class="process-warning" style="display: none;">Multiple Flask processes running!</span>
             </div>
             <div class="task-list" id="process-list">
-                <div class="empty-state">프로세스 정보 로딩 중...</div>
+                <div class="empty-state">Loading processes...</div>
             </div>
         </div>
     </div>
 
     <script>
-        const AGENTS = ['pm', 'coder', 'qa', 'qa_logic', 'researcher', 'strategy', 'secretary'];
+        const AGENTS = ['pm', 'coder', 'qa', 'researcher', 'strategist', 'analyst'];
 
         // Tab switching
         function switchTab(tabName) {
@@ -775,40 +547,6 @@
             if (ms < 1000) return `${ms}ms`;
             if (ms < 60000) return `${(ms/1000).toFixed(1)}s`;
             return `${(ms/60000).toFixed(1)}m`;
-        }
-
-        // Docker container rendering
-        function renderContainer(container) {
-            const roleClass = container.short_name.split('_')[0];
-            return `
-                <div class="container-card ${container.status}">
-                    <div class="container-header">
-                        <span class="container-name ${roleClass}">${container.short_name}</span>
-                        <span class="container-status ${container.health}">${container.health}</span>
-                    </div>
-                    <div class="container-info">
-                        <span><span class="label">Role:</span> <span class="value">${container.role}</span></span>
-                        <span><span class="label">Mode:</span> <span class="value">${container.mode}</span></span>
-                        <span><span class="label">LLM:</span> <span class="value">${container.llm}</span></span>
-                        <span><span class="label">Persona:</span> <span class="value">${container.persona}</span></span>
-                    </div>
-                    <div style="font-size: 0.75rem; color: #555; margin-top: 4px;">${container.status_text}</div>
-                </div>
-            `;
-        }
-
-        // Pipeline job rendering
-        function renderJob(job, status) {
-            const verdictClass = job.verdict ? job.verdict.toLowerCase() : '';
-            return `
-                <div class="job-item ${status}">
-                    <span class="job-id">${job.id}</span>
-                    <span class="job-role ${job.role}">${job.role}-${job.mode}</span>
-                    <span class="job-prompt" title="${job.prompt}">${job.prompt}</span>
-                    ${job.verdict ? `<span class="job-verdict ${verdictClass}">${job.verdict}</span>` : '<span></span>'}
-                    ${job.rework_count > 0 ? `<span class="job-rework">🔄 ${job.rework_count}</span>` : '<span></span>'}
-                </div>
-            `;
         }
 
         function renderTask(task) {
@@ -839,66 +577,32 @@
                 const res = await fetch('/api/monitor/dashboard');
                 const data = await res.json();
 
-                // Docker Stats
-                const docker = data.docker || {};
-                document.getElementById('docker-count').textContent = `${docker.running || 0}/${docker.total || 9}`;
-                document.getElementById('docker-count').className = 'stat-value' +
-                    (docker.running < docker.total ? ' warning' : '');
-                document.getElementById('docker-running-count').textContent = docker.running || 0;
+                // CLI Stats
+                const cli = data.cli || {};
+                const queue = cli.queue || {};
+                const health = cli.health || {};
 
-                // Docker Grid
-                const containers = docker.containers || [];
-                if (containers.length > 0) {
-                    document.getElementById('docker-grid').innerHTML = containers.map(renderContainer).join('');
-                } else if (docker.error) {
-                    document.getElementById('docker-grid').innerHTML = `<div class="empty-state">${docker.error}</div>`;
-                } else {
-                    document.getElementById('docker-grid').innerHTML = '<div class="empty-state">Docker 컨테이너 없음</div>';
-                }
+                document.getElementById('cli-queue').textContent = queue.queue_size || 0;
+                document.getElementById('cli-queue').className = 'stat-value' +
+                    (queue.queue_size > 5 ? ' warning' : '');
 
-                // Pipeline Stats
-                const pipeline = data.pipeline || {};
-                const pipelineStats = pipeline.stats || {};
-                document.getElementById('pipeline-pending').textContent = pipelineStats.pending || 0;
-                document.getElementById('pipeline-completed').textContent = pipelineStats.completed || 0;
-                document.getElementById('pending-job-count').textContent = pipelineStats.pending || 0;
-                document.getElementById('completed-job-count').textContent = pipelineStats.completed || 0;
+                // CLI Tab details
+                document.getElementById('cli-queue-size').textContent = queue.queue_size || 0;
+                document.getElementById('cli-active').textContent = cli.processes?.active_count || 0;
+                document.getElementById('cli-rate-limit').textContent = queue.rate_limiter?.available || '-';
+                document.getElementById('cli-max-concurrent').textContent = cli.config?.max_concurrent || '-';
 
-                // Pipeline Flow - count jobs by role
-                const pendingJobs = pipeline.pending || [];
-                const inProgressJobs = pipeline.in_progress || [];
-                const allActive = [...pendingJobs, ...inProgressJobs];
-
-                ['pm', 'coder', 'qa', 'reviewer'].forEach(role => {
-                    const count = allActive.filter(j => j.role === role).length;
-                    const stage = document.getElementById(`stage-${role}`);
-                    if (stage) {
-                        stage.querySelector('.count').textContent = count;
-                        stage.classList.toggle('active', count > 0);
-                    }
-                });
-
-                // Pending Jobs
-                if (pendingJobs.length > 0 || inProgressJobs.length > 0) {
-                    const allJobs = [
-                        ...inProgressJobs.map(j => renderJob(j, 'in_progress')),
-                        ...pendingJobs.map(j => renderJob(j, 'pending'))
-                    ];
-                    document.getElementById('pending-jobs').innerHTML = allJobs.join('');
-                } else {
-                    document.getElementById('pending-jobs').innerHTML = '<div class="empty-state">대기 중인 작업이 없습니다</div>';
-                }
-
-                // Completed Jobs
-                const completedJobs = pipeline.completed || [];
-                if (completedJobs.length > 0) {
-                    document.getElementById('completed-jobs').innerHTML = completedJobs.map(j => renderJob(j, 'completed')).join('');
-                } else {
-                    document.getElementById('completed-jobs').innerHTML = '<div class="empty-state">완료된 작업이 없습니다</div>';
-                }
+                // Health
+                document.getElementById('health-queue').textContent = health.queue_healthy ? 'OK' : 'FULL';
+                document.getElementById('health-queue').className = 'value' + (health.queue_healthy ? '' : ' error');
+                document.getElementById('health-rate').textContent = health.rate_limit_ok ? 'OK' : 'LIMITED';
+                document.getElementById('health-rate').className = 'value' + (health.rate_limit_ok ? '' : ' warning');
+                document.getElementById('health-zombie').textContent = health.no_zombies ? 'OK' : 'ZOMBIES';
+                document.getElementById('health-zombie').className = 'value' + (health.no_zombies ? '' : ' error');
 
                 // Agent Monitor Stats
                 document.getElementById('active-task-count').textContent = data.active_count || 0;
+                document.getElementById('active-agents').textContent = data.active_count || 0;
                 document.getElementById('completed-task-count').textContent = data.recent_completed?.length || 0;
 
                 // Agents Grid
@@ -913,7 +617,7 @@
                 if (activeTasks.length > 0) {
                     document.getElementById('active-tasks').innerHTML = activeTasks.map(renderTask).join('');
                 } else {
-                    document.getElementById('active-tasks').innerHTML = '<div class="empty-state">실행 중인 작업이 없습니다</div>';
+                    document.getElementById('active-tasks').innerHTML = '<div class="empty-state">No active tasks</div>';
                 }
 
                 // Completed Tasks
@@ -921,7 +625,7 @@
                 if (completedTasks.length > 0) {
                     document.getElementById('completed-tasks').innerHTML = completedTasks.map(renderTask).join('');
                 } else {
-                    document.getElementById('completed-tasks').innerHTML = '<div class="empty-state">완료된 작업이 없습니다</div>';
+                    document.getElementById('completed-tasks').innerHTML = '<div class="empty-state">No completed tasks</div>';
                 }
 
             } catch (err) {
@@ -948,7 +652,7 @@
 
             let badge = '<span class="process-badge other">Python</span>';
             if (proc.is_current) {
-                badge = '<span class="process-badge current">현재 서버</span>';
+                badge = '<span class="process-badge current">Current</span>';
             } else if (proc.is_flask) {
                 badge = '<span class="process-badge flask">Flask</span>';
             }
@@ -969,12 +673,11 @@
                 const res = await fetch('/api/monitor/processes');
                 const data = await res.json();
 
-                // Stats 업데이트
                 document.getElementById('process-total-count').textContent = data.total_count || 0;
                 document.getElementById('current-pid').textContent = data.current_pid || '-';
                 document.getElementById('flask-count').textContent = data.flask_count || 0;
+                document.getElementById('flask-processes').textContent = data.flask_count || 0;
 
-                // 경고 표시
                 const warning = document.getElementById('process-warning');
                 if (data.flask_count > 1) {
                     warning.style.display = 'inline';
@@ -982,25 +685,24 @@
                     warning.style.display = 'none';
                 }
 
-                // 프로세스 리스트 렌더링
                 const processes = data.python_processes || [];
                 if (processes.length > 0) {
                     document.getElementById('process-list').innerHTML = processes.map(renderProcess).join('');
                 } else {
-                    document.getElementById('process-list').innerHTML = '<div class="empty-state">Python 프로세스가 없습니다</div>';
+                    document.getElementById('process-list').innerHTML = '<div class="empty-state">No Python processes</div>';
                 }
             } catch (err) {
                 console.error('Process update failed:', err);
-                document.getElementById('process-list').innerHTML = '<div class="empty-state">프로세스 정보 로드 실패</div>';
+                document.getElementById('process-list').innerHTML = '<div class="empty-state">Failed to load processes</div>';
             }
         }
 
-        // 초기 로드
+        // Initial load
         updateDashboard();
         updateEmbeddingQueue();
         updateProcesses();
 
-        // 자동 갱신
+        // Auto refresh
         setInterval(updateDashboard, 2000);
         setInterval(updateEmbeddingQueue, 5000);
         setInterval(updateProcesses, 5000);

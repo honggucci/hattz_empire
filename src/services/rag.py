@@ -403,7 +403,8 @@ def index_document(
     content: str,
     metadata: Dict[str, Any] = None,
     project: Optional[str] = None,
-    source: str = "web"
+    source: str = "web",
+    agent: Optional[str] = None
 ) -> str:
     """
     문서 인덱싱 (임베딩 생성 + 저장)
@@ -415,6 +416,7 @@ def index_document(
         metadata: 추가 메타데이터
         project: 프로젝트 ID (프로젝트별 필터링용)
         source: 출처 ('web', 'claude_code')
+        agent: 에이전트 역할 ('pm', 'coder', 'qa' 등) - v2.5
     """
     conn = get_connection()
     cursor = conn.cursor()
@@ -436,10 +438,13 @@ def index_document(
     # ID 생성
     doc_id = f"{source_type}_{source_id}_{c_hash[:8]}"
 
-    # 저장
+    # v2.5: metadata에서 agent 추출 (파라미터 우선)
+    doc_agent = agent or (metadata.get("agent") if metadata else None)
+
+    # 저장 (agent 컬럼 추가)
     cursor.execute("""
-        INSERT INTO embeddings (id, project, source, source_type, source_id, content, content_hash, embedding, metadata)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO embeddings (id, project, source, source_type, source_id, content, content_hash, embedding, metadata, agent)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         doc_id,
         project,
@@ -449,7 +454,8 @@ def index_document(
         content,
         c_hash,
         json.dumps(embedding),
-        json.dumps(metadata or {})
+        json.dumps(metadata or {}),
+        doc_agent
     ))
 
     conn.commit()
@@ -566,16 +572,18 @@ def search(
     query: str,
     source_types: List[str] = None,
     project: Optional[str] = None,
+    agent_filter: Optional[str] = None,
     top_k: int = 5,
     threshold: float = 0.3
 ) -> SearchResult:
     """
-    벡터 검색
+    벡터 검색 (v2.5: agent 필터 추가)
 
     Args:
         query: 검색 쿼리
         source_types: 소스 타입 필터 (['log', 'message', 'conversation'])
         project: 프로젝트 ID로 필터 (None이면 전체 검색)
+        agent_filter: 에이전트 필터 ('coder', 'pm', 'qa' 등)
         top_k: 반환할 상위 결과 수
         threshold: 최소 유사도 임계값
     """
@@ -598,10 +606,15 @@ def search(
         conditions.append("project = ?")
         params.append(project)
 
+    # v2.5: agent 필터 추가
+    if agent_filter:
+        conditions.append("agent = ?")
+        params.append(agent_filter)
+
     where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
 
     cursor.execute(f"""
-        SELECT id, source_type, source_id, content, embedding, metadata, project
+        SELECT id, source_type, source_id, content, embedding, metadata, project, agent
         FROM embeddings
         {where_clause}
     """, params)
@@ -612,7 +625,7 @@ def search(
     # 유사도 계산
     results = []
     for row in rows:
-        doc_id, source_type, source_id, content, embedding_json, metadata_json, doc_project = row
+        doc_id, source_type, source_id, content, embedding_json, metadata_json, doc_project, doc_agent = row
 
         try:
             embedding = json.loads(embedding_json)
@@ -626,8 +639,14 @@ def search(
             results.append(Document(
                 id=doc_id,
                 content=content,
-                metadata={**metadata, "source_type": source_type, "source_id": source_id, "project": doc_project},
-                embedding=None,  # 결과에는 임베딩 포함 안 함
+                metadata={
+                    **metadata,
+                    "source_type": source_type,
+                    "source_id": source_id,
+                    "project": doc_project,
+                    "agent": doc_agent  # v2.5: agent 추가
+                },
+                embedding=None,
                 score=score
             ))
 
@@ -657,6 +676,11 @@ def search_all(query: str, project: Optional[str] = None, top_k: int = 5) -> Sea
     return search(query, source_types=None, project=project, top_k=top_k)
 
 
+def search_by_agent(query: str, agent: str, project: Optional[str] = None, top_k: int = 5) -> SearchResult:
+    """v2.5: 에이전트별 검색 (coder, pm, qa 등)"""
+    return search(query, source_types=None, project=project, agent_filter=agent, top_k=top_k)
+
+
 # =============================================================================
 # Context Building
 # =============================================================================
@@ -664,23 +688,27 @@ def search_all(query: str, project: Optional[str] = None, top_k: int = 5) -> Sea
 def build_context(
     query: str,
     project: Optional[str] = None,
+    agent_filter: Optional[str] = None,
     top_k: int = 3,
     use_gemini: bool = True,
-    language: str = "ko"
+    language: str = "ko",
+    session_id: Optional[str] = None
 ) -> str:
     """
-    쿼리 관련 컨텍스트 구성 (PM 시스템 프롬프트에 주입용)
+    쿼리 관련 컨텍스트 구성 (에이전트 시스템 프롬프트에 주입용)
     conversation 타입이면 DB에서 상세 정보를 가져와 풍부한 컨텍스트 제공
     Gemini 요약 활성화 시, 검색된 문서들을 쿼리 관점에서 요약
 
     Args:
         query: 검색 쿼리
         project: 프로젝트 ID (특정 프로젝트만 검색)
+        agent_filter: 에이전트 필터 ('coder', 'pm', 'qa' 등) - v2.5
         top_k: 반환할 문서 수
         use_gemini: Gemini 요약 사용 여부 (기본 True)
         language: 출력 언어 ('ko' 또는 'en')
+        session_id: 세션 ID (로깅용) - v2.5
     """
-    result = search_all(query, project=project, top_k=top_k)
+    result = search(query, project=project, agent_filter=agent_filter, top_k=top_k)
 
     if not result.documents:
         return ""
@@ -712,7 +740,7 @@ def build_context(
 
     # Gemini 요약 사용
     if use_gemini and GEMINI_AVAILABLE and doc_contents:
-        summarized = summarize_with_gemini(query, doc_contents, language)
+        summarized = summarize_with_gemini(query, doc_contents, language, session_id=session_id)
         if summarized:
             return f"""## Related Context (RAG + Gemini Summary)
 

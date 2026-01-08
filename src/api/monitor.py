@@ -1,17 +1,17 @@
 """
-Hattz Empire - Agent Monitor API v2.4.1
-CLI Queue + 프로세스 모니터링 (Docker 제거)
+Hattz Empire - Agent Monitor API v2.6
+CLI Queue + 프로세스 모니터링 + Retry Escalation
 
 Endpoints:
 - GET /api/monitor/cli            - CLI Queue + 프로세스 상태
-- GET /api/monitor/pipeline       - Jobs 파이프라인 상태
 - GET /api/monitor/dashboard      - 통합 대시보드
 - GET /api/monitor/stream         - SSE 실시간 스트림
 - POST /api/monitor/kill-zombie   - 좀비 프로세스 강제 종료
+- GET /api/monitor/escalation     - Retry Escalation 상태
+- POST /api/monitor/escalation/clear - 에스컬레이션 히스토리 초기화
 """
 import os
 import json
-import subprocess
 import psutil
 from datetime import datetime
 from flask import jsonify, request, Response
@@ -20,7 +20,7 @@ from src.services.agent_monitor import get_agent_monitor
 from . import monitor_bp
 
 # ===========================================================================
-# CLI Queue & Process Monitor (v2.4.1)
+# CLI Queue & Process Monitor
 # ===========================================================================
 
 def _get_cli_status():
@@ -73,75 +73,6 @@ def kill_zombie():
     })
 
 
-# ===========================================================================
-# Jobs Pipeline Monitor
-# ===========================================================================
-
-def _get_pipeline_status():
-    """Jobs 파이프라인 상태 조회"""
-    from src.api.jobs import _jobs, _results, PIPELINE, MAX_REWORK_ROUNDS
-
-    # 상태별 분류
-    pending = []
-    in_progress = []
-    completed = []
-    failed = []
-
-    for job_id, job in _jobs.items():
-        result = _results.get(job_id)
-        job_info = {
-            "id": job_id[:8],
-            "full_id": job_id,
-            "role": job.get("role"),
-            "mode": job.get("mode"),
-            "task_id": job.get("task_id", "")[:8],
-            "rework_count": job.get("rework_count", 0),
-            "created_at": job.get("created_at"),
-            "prompt": job.get("prompt", "")[:100],
-        }
-
-        if result:
-            job_info["verdict"] = result.get("verdict")
-            job_info["success"] = result.get("success")
-            if result.get("success"):
-                completed.append(job_info)
-            else:
-                job_info["error"] = result.get("error")
-                failed.append(job_info)
-        elif job.get("status") == "in_progress":
-            in_progress.append(job_info)
-        else:
-            pending.append(job_info)
-
-    # 최신순 정렬
-    for lst in [pending, in_progress, completed, failed]:
-        lst.sort(key=lambda x: x.get("created_at", ""), reverse=True)
-
-    return {
-        "pending": pending[:20],
-        "in_progress": in_progress[:10],
-        "completed": completed[:20],
-        "failed": failed[:10],
-        "stats": {
-            "pending": len(pending),
-            "in_progress": len(in_progress),
-            "completed": len(completed),
-            "failed": len(failed),
-            "total": len(_jobs),
-        },
-        "config": {
-            "pipeline": PIPELINE,
-            "max_rework": MAX_REWORK_ROUNDS,
-        }
-    }
-
-
-@monitor_bp.route('/pipeline')
-def get_pipeline_status():
-    """Jobs 파이프라인 상태"""
-    return jsonify(_get_pipeline_status())
-
-
 @monitor_bp.route('/processes')
 def get_processes():
     """현재 실행 중인 Python/Flask 프로세스 목록"""
@@ -184,23 +115,18 @@ def get_processes():
 
 @monitor_bp.route('/dashboard')
 def get_dashboard():
-    """대시보드용 전체 상태 (CLI + Pipeline + Agent)"""
+    """대시보드용 전체 상태 (CLI + Agent)"""
     monitor = get_agent_monitor()
     agent_data = monitor.get_dashboard_data()
 
     # CLI Queue + 프로세스 상태
     cli_data = _get_cli_status()
 
-    # Pipeline 상태
-    pipeline_data = _get_pipeline_status()
-
     return jsonify({
         # Agent Monitor 기존 데이터
         **agent_data,
         # CLI Queue + 프로세스
         "cli": cli_data,
-        # Jobs 파이프라인
-        "pipeline": pipeline_data,
         # 타임스탬프
         "timestamp": datetime.now().isoformat(),
     })
@@ -251,8 +177,6 @@ def get_task(task_id: str):
 @monitor_bp.route('/stream')
 def stream_status():
     """SSE 실시간 상태 스트림"""
-    from flask import Response
-    import json
     import time
 
     def generate():
@@ -271,3 +195,41 @@ def stream_status():
             time.sleep(1)  # 1초마다 체크
 
     return Response(generate(), mimetype='text/event-stream')
+
+
+# ===========================================================================
+# Retry Escalation Monitor
+# ===========================================================================
+
+@monitor_bp.route('/escalation')
+def get_escalation_status():
+    """Retry Escalation 상태 조회"""
+    from src.services.cli_supervisor import get_retry_escalator
+
+    escalator = get_retry_escalator()
+    stats = escalator.get_stats()
+
+    return jsonify({
+        "status": "ok",
+        "escalation": stats,
+        "config": {
+            "max_same_signature": escalator.max_same_signature,
+            "role_switch_map": escalator.ROLE_SWITCH_MAP
+        }
+    })
+
+
+@monitor_bp.route('/escalation/clear', methods=['POST'])
+def clear_escalation_history():
+    """에스컬레이션 히스토리 초기화"""
+    from src.services.cli_supervisor import get_retry_escalator
+
+    profile = request.json.get('profile') if request.json else None
+
+    escalator = get_retry_escalator()
+    escalator.clear_history(profile)
+
+    return jsonify({
+        "status": "ok",
+        "message": f"에스컬레이션 히스토리 초기화됨 (profile={profile or 'all'})"
+    })

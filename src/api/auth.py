@@ -64,5 +64,12 @@ def chat():
 @auth_bp.route('/monitor')
 @login_required
 def monitor():
-    """에이전트 모니터링 페이지"""
-    return render_template('monitor.html')
+    """에이전트 모니터링 페이지 -> admin으로 리다이렉트"""
+    return redirect(url_for('auth.admin'))
+
+
+@auth_bp.route('/admin')
+@login_required
+def admin():
+    """통합 관리자 대시보드"""
+    return render_template('admin.html')

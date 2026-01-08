@@ -1,21 +1,26 @@
 """
-Hattz Empire - AI Orchestration System v2.1.1 (통장 보호 + 주둥이 봉인 에디션)
-비용 86% 절감 + 품질 유지
-
-2026.01.05 업데이트 (v2.1.1):
-- PM: GPT-5.2 pro (medium) - max_output_tokens: 320 (주둥이 봉인)
-- Excavator: GPT-5.2 pro (medium) - max_output_tokens: 520
-- Strategist: GPT-5.2 pro (high) - max_output_tokens: 900 (조건부)
-- Analyst/Documentor: Gemini 2.0 Flash - LOG_ONLY (요약만, 판단 금지)
-- Coder/QA/Reviewer: Claude Code CLI - EXEC (diff만, ABORT 탈출구)
-- Researcher: Perplexity Sonar Pro - max_output_tokens: 900
-
-핵심 철학:
-- 뇌(PM/Excavator)는 싸구려 금지
-- 코드는 Claude CLI로 (API 토큰 격리)
-- VIP는 에러 컨텍스트 있을 때만
-- 출력은 JSON/diff만 (Strict output)
+Hattz Empire - AI Orchestration System
+비용 86% 절감 + 품질 유지 + 부트로더 원칙
 """
+
+# =============================================================================
+# VERSION - Single Source of Truth
+# 이 값만 변경하면 문서 동기화 스크립트가 전체 업데이트
+# =============================================================================
+VERSION = "2.6.0"
+VERSION_DATE = "2026-01-07"
+VERSION_CODENAME = "Analytics Dashboard + RAG Agent Filter"
+
+# 버전 히스토리
+VERSION_HISTORY = {
+    "2.6.0": "Analytics Dashboard + RAG Agent Filter (2026-01-07)",
+    "2.5.5": "부트로더 원칙 + PM DFA + Semantic Guard (2026-01-07)",
+    "2.5.4": "PM Decision Machine + Retry Escalation (2026-01-07)",
+    "2.4.0": "Dual Engine V3 + Persona Pack (2026-01-07)",
+    "2.3.0": "Hook Chain + Router Agent (2026-01-06)",
+    "2.2.1": "Docker + JSONL Persistence (2026-01-06)",
+    "2.1.1": "통장 보호 + 주둥이 봉인 (2026-01-05)",
+}
 from dataclasses import dataclass, field
 from typing import Optional
 import os

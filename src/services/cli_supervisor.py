@@ -1396,6 +1396,7 @@ class CLISupervisor:
         proc = None
         try:
             # Popen으로 프로세스 시작 (추적 가능)
+            # encoding="utf-8"로 이모지/한글 처리 (Windows cp949 문제 해결)
             proc = subprocess.Popen(
                 cmd,
                 shell=True,
@@ -1403,7 +1404,13 @@ class CLISupervisor:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
-                env={**os.environ, "CLAUDE_CODE_NONINTERACTIVE": "1"}
+                encoding="utf-8",
+                errors="replace",  # 디코딩 실패 시 ? 로 대체
+                env={
+                    **os.environ,
+                    "CLAUDE_CODE_NONINTERACTIVE": "1",
+                    "PYTHONIOENCODING": "utf-8",  # Windows _readerthread 인코딩 강제
+                }
             )
 
             # 프로세스 등록 (좀비 추적용)
@@ -1596,14 +1603,21 @@ class CLISupervisor:
         print(f"[CLI-Supervisor] 위원회 호출: {role}:{persona} (model: {model}, session: {session_uuid[:8]}...)")
 
         try:
+            # encoding="utf-8"로 이모지/한글 처리 (Windows cp949 문제 해결)
             result = subprocess.run(
                 cmd,
                 shell=True,
                 cwd=self.working_dir,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=self.config["timeout_seconds"],
-                env={**os.environ, "CLAUDE_CODE_NONINTERACTIVE": "1"}
+                env={
+                    **os.environ,
+                    "CLAUDE_CODE_NONINTERACTIVE": "1",
+                    "PYTHONIOENCODING": "utf-8",
+                }
             )
 
             output = result.stdout

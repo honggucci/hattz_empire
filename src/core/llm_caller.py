@@ -30,6 +30,12 @@ from config import (
     ENFORCE_OUTPUT_CONTRACT, CONTRACT_EXEMPT_AGENTS  # v2.5
 )
 
+# v2.6: Server Logger 연동
+from src.utils.server_logger import log_llm_call, log_error, logger
+
+# v2.6.1: Flow Monitor 연동 (부트로더 원칙 준수 모니터링)
+from src.services.flow_monitor import get_flow_monitor
+
 # v2.5: Output Contract + Format Gate
 from src.core.contracts import (
     validate_output,
@@ -235,6 +241,7 @@ from src.services import database as db
 from src.services import executor
 from src.services import rag
 from src.services.agent_scorecard import get_scorecard
+from src.services import cost_tracker
 
 
 # =============================================================================
@@ -268,13 +275,16 @@ def call_anthropic(model_config: ModelConfig, messages: list, system_prompt: str
     return call_claude_cli(messages, system_prompt, profile)
 
 
-def call_openai(model_config: ModelConfig, messages: list, system_prompt: str) -> str:
+def call_openai(model_config: ModelConfig, messages: list, system_prompt: str) -> tuple[str, int, int]:
     """
     OpenAI API 호출
 
     GPT-5.2 Extended Thinking 지원:
     - reasoning_effort: "high" or "xhigh" → 실제 reasoning 토큰 사용
     - reasoning_effort가 none이 아니면 temperature/top_p 사용 불가
+
+    Returns:
+        (response_text, input_tokens, output_tokens)
     """
     try:
         import openai
@@ -317,13 +327,24 @@ def call_openai(model_config: ModelConfig, messages: list, system_prompt: str) -
                 temperature=model_config.temperature,
                 messages=full_messages
             )
-        return response.choices[0].message.content
+
+        # 토큰 사용량 추출
+        usage = response.usage
+        input_tokens = usage.prompt_tokens if usage else 0
+        output_tokens = usage.completion_tokens if usage else 0
+
+        return response.choices[0].message.content, input_tokens, output_tokens
     except Exception as e:
-        return f"[OpenAI Error] {str(e)}"
+        return f"[OpenAI Error] {str(e)}", 0, 0
 
 
-def call_google(model_config: ModelConfig, messages: list, system_prompt: str) -> str:
-    """Google Gemini API 호출"""
+def call_google(model_config: ModelConfig, messages: list, system_prompt: str) -> tuple[str, int, int]:
+    """
+    Google Gemini API 호출
+
+    Returns:
+        (response_text, input_tokens, output_tokens)
+    """
     try:
         if "gemini-3" in model_config.model_id:
             from google import genai
@@ -343,7 +364,15 @@ def call_google(model_config: ModelConfig, messages: list, system_prompt: str) -
                     "max_output_tokens": model_config.max_tokens,
                 }
             )
-            return response.text
+
+            # Gemini 3 토큰 사용량 추출
+            input_tokens = 0
+            output_tokens = 0
+            if hasattr(response, 'usage_metadata'):
+                input_tokens = getattr(response.usage_metadata, 'prompt_token_count', 0) or 0
+                output_tokens = getattr(response.usage_metadata, 'candidates_token_count', 0) or 0
+
+            return response.text, input_tokens, output_tokens
         else:
             import google.generativeai as genai
             genai.configure(api_key=os.getenv(model_config.api_key_env))
@@ -360,25 +389,73 @@ def call_google(model_config: ModelConfig, messages: list, system_prompt: str) -
 
             chat = model.start_chat(history=history)
             response = chat.send_message(messages[-1]["content"])
-            return response.text
+
+            # Gemini 1.5/2.0 토큰 사용량 추출 (근사치)
+            input_tokens = 0
+            output_tokens = 0
+            if hasattr(response, 'usage_metadata'):
+                input_tokens = getattr(response.usage_metadata, 'prompt_token_count', 0) or 0
+                output_tokens = getattr(response.usage_metadata, 'candidates_token_count', 0) or 0
+
+            return response.text, input_tokens, output_tokens
     except Exception as e:
-        return f"[Google Error] {str(e)}"
+        return f"[Google Error] {str(e)}", 0, 0
 
 
-def call_llm(model_config: ModelConfig, messages: list, system_prompt: str) -> str:
-    """LLM 호출 라우터"""
+def call_llm(
+    model_config: ModelConfig,
+    messages: list,
+    system_prompt: str,
+    session_id: str = None,
+    agent_role: str = None
+) -> str:
+    """
+    LLM 호출 라우터 + 비용 기록
+
+    Args:
+        model_config: 모델 설정
+        messages: 메시지 리스트
+        system_prompt: 시스템 프롬프트
+        session_id: 세션 ID (비용 기록용)
+        agent_role: 에이전트 역할 (비용 기록용)
+
+    Returns:
+        LLM 응답 텍스트
+    """
+    input_tokens = 0
+    output_tokens = 0
+    response_text = ""
+
     if model_config.provider == "anthropic":
-        return call_anthropic(model_config, messages, system_prompt)
+        response_text = call_anthropic(model_config, messages, system_prompt)
+        # CLI 호출은 토큰 추적 안 함 (무료)
     elif model_config.provider == "openai":
-        return call_openai(model_config, messages, system_prompt)
+        response_text, input_tokens, output_tokens = call_openai(model_config, messages, system_prompt)
     elif model_config.provider == "google":
-        return call_google(model_config, messages, system_prompt)
+        response_text, input_tokens, output_tokens = call_google(model_config, messages, system_prompt)
     elif model_config.provider == "claude_cli":
-        # Claude Code CLI provider (EXEC tier)
+        # Claude Code CLI provider (EXEC tier) - 무료
         from src.services.cli_supervisor import call_claude_cli
-        return call_claude_cli(messages, system_prompt, getattr(model_config, 'profile', 'coder'))
+        response_text = call_claude_cli(messages, system_prompt, getattr(model_config, 'profile', 'coder'))
     else:
         return f"[Error] Unknown provider: {model_config.provider}"
+
+    # 비용 기록 (토큰이 있고 에러가 아닌 경우)
+    if input_tokens > 0 or output_tokens > 0:
+        if not response_text.startswith("[") or not "Error]" in response_text:
+            try:
+                cost_tracker.record_api_call(
+                    session_id=session_id or "unknown",
+                    agent_role=agent_role or "unknown",
+                    model_id=model_config.model_id,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens
+                )
+                print(f"[CostTracker] Recorded: {model_config.model_id} ({input_tokens}in/{output_tokens}out)")
+            except Exception as e:
+                print(f"[CostTracker] Failed to record: {e}")
+
+    return response_text
 
 
 def call_dual_engine(role: str, messages: list, system_prompt: str) -> str:
@@ -484,7 +561,8 @@ def dual_engine_write_audit_rewrite(
     role: str,
     messages: list,
     system_prompt: str,
-    max_rewrite: int = 3
+    max_rewrite: int = 3,
+    session_id: str = None
 ) -> Tuple[str, Dict[str, Any]]:
     """
     듀얼 엔진 V3: Write → Audit → Rewrite 패턴 (v2.3.3)
@@ -518,7 +596,7 @@ def dual_engine_write_audit_rewrite(
     # 1단계: Writer 초안 작성 (v2.5 Format Gate 적용)
     print(f"[Dual-V3] {role} Writer ({writer_key}) 초안 작성 중...")
     draft, writer_name, format_validated = _call_with_contract(
-        writer_key, messages, system_prompt, writer_profile, role
+        writer_key, messages, system_prompt, writer_profile, role, session_id=session_id
     )
 
     if "[Error]" in draft or "[CLI Error]" in draft:
@@ -582,7 +660,7 @@ def dual_engine_write_audit_rewrite(
 
         print(f"[Dual-V3] {role} Auditor ({auditor_key}) 리뷰 중...")
         auditor_response, auditor_name = _call_model_or_cli(
-            auditor_key, auditor_messages, system_prompt, auditor_profile
+            auditor_key, auditor_messages, system_prompt, auditor_profile, session_id, f"{role}_auditor"
         )
 
         # JSON 파싱
@@ -686,7 +764,14 @@ def dual_engine_write_audit_rewrite(
     return draft, meta
 
 
-def _call_model_or_cli(model_key: str, messages: list, system_prompt: str, profile: str = "coder") -> Tuple[str, str]:
+def _call_model_or_cli(
+    model_key: str,
+    messages: list,
+    system_prompt: str,
+    profile: str = "coder",
+    session_id: str = None,
+    agent_role: str = None
+) -> Tuple[str, str]:
     """
     모델 또는 CLI 호출 헬퍼 함수
 
@@ -695,6 +780,8 @@ def _call_model_or_cli(model_key: str, messages: list, system_prompt: str, profi
         messages: 메시지 리스트
         system_prompt: 시스템 프롬프트
         profile: CLI 프로필 (coder/qa/reviewer)
+        session_id: 세션 ID (비용 추적용)
+        agent_role: 에이전트 역할 (비용 추적용)
 
     Returns:
         (응답, 모델명)
@@ -716,7 +803,7 @@ def _call_model_or_cli(model_key: str, messages: list, system_prompt: str, profi
             return f"[CLI Error] {result.error or result.abort_reason}", f"Claude CLI ({profile})"
     else:
         model = MODELS.get(model_key, MODELS.get("gpt_5_mini"))
-        return call_llm(model, messages, system_prompt), model.name
+        return call_llm(model, messages, system_prompt, session_id, agent_role), model.name
 
 
 def _call_with_contract(
@@ -725,7 +812,8 @@ def _call_with_contract(
     system_prompt: str,
     profile: str,
     agent_role: str,
-    max_retry: int = 3
+    max_retry: int = 3,
+    session_id: str = None
 ) -> Tuple[str, str, bool]:
     """
     v2.5 Format Gate: LLM 호출 + Output Contract 검증
@@ -737,6 +825,7 @@ def _call_with_contract(
         profile: CLI 프로필
         agent_role: 에이전트 역할 (coder, qa, reviewer 등)
         max_retry: 최대 재시도 횟수
+        session_id: 세션 ID (비용 추적용)
 
     Returns:
         (응답, 모델명, 검증성공여부)
@@ -745,7 +834,7 @@ def _call_with_contract(
 
     # Contract가 없는 역할은 기존 방식으로 처리
     if not contract:
-        response, model_name = _call_model_or_cli(model_key, messages, system_prompt, profile)
+        response, model_name = _call_model_or_cli(model_key, messages, system_prompt, profile, session_id, agent_role)
         return response, model_name, True
 
     # Schema 프롬프트를 시스템 프롬프트에 주입
@@ -755,7 +844,7 @@ def _call_with_contract(
     last_error = None
 
     for attempt in range(max_retry):
-        response, model_name = _call_model_or_cli(model_key, messages, enhanced_prompt, profile)
+        response, model_name = _call_model_or_cli(model_key, messages, enhanced_prompt, profile, session_id, agent_role)
 
         # 에러 응답은 검증 스킵
         if "[Error]" in response or "[CLI Error]" in response:
@@ -1412,18 +1501,32 @@ CEO는 하위 에이전트(`{agent_role}`)를 직접 호출할 수 없습니다.
         agent_message = rag.translate_for_agent(message)
         print(f"[Translate] CEO→Agent: {len(message)}자 → {len(agent_message)}자")
 
-    if agent_role == "pm":
+    # =========================================================================
+    # v2.5: 에이전트별 RAG 컨텍스트 주입 (agent_filter 활용)
+    # - PM: 전체 검색 (agent_filter=None)
+    # - Coder/QA/Strategist: 에이전트별 필터링 (관련 컨텍스트만)
+    # =========================================================================
+    RAG_ENABLED_AGENTS = ["pm", "coder", "qa", "strategist", "researcher"]
+
+    if agent_role in RAG_ENABLED_AGENTS:
         try:
+            # PM은 전체 검색, 나머지는 에이전트별 필터
+            agent_filter = None if agent_role == "pm" else agent_role
+            top_k = 5 if agent_role == "pm" else 3  # PM은 더 많은 컨텍스트
+
             rag_context = rag.build_context(
                 agent_message,
-                project=current_project,  # 프로젝트별 RAG 필터링
-                top_k=5,
+                project=current_project,
+                agent_filter=agent_filter,
+                top_k=top_k,
                 use_gemini=True,
-                language="en"
+                language="en",
+                session_id=current_session_id
             )
             if rag_context:
                 system_prompt = system_prompt + "\n\n" + rag_context
-                print(f"[RAG] Context injected ({current_project or 'all'}): {len(rag_context)} chars")
+                filter_info = f"agent={agent_filter}" if agent_filter else "all"
+                print(f"[RAG] Context injected ({current_project or 'all'}, {filter_info}): {len(rag_context)} chars")
         except Exception as e:
             print(f"[RAG] Context injection failed: {e}")
 
@@ -1470,7 +1573,7 @@ CEO는 하위 에이전트(`{agent_role}`)를 직접 호출할 수 없습니다.
     # =========================================================================
     if use_dual_engine and agent_role in DUAL_ENGINE_ROLES:
         print(f"[Dual-V3] {agent_role} Write-Audit-Rewrite 패턴 활성화")
-        response, dual_meta = dual_engine_write_audit_rewrite(agent_role, messages, system_prompt)
+        response, dual_meta = dual_engine_write_audit_rewrite(agent_role, messages, system_prompt, session_id=current_session_id)
 
         # 위원회 자동 소집 체크 (dual_meta 전달) + FAIL 시 재수정 루프
         MAX_COUNCIL_RETRY = 2  # 위원회 재수정 최대 횟수
@@ -1511,7 +1614,7 @@ CEO는 하위 에이전트(`{agent_role}`)를 직접 호출할 수 없습니다.
                         rewrite_messages.append({"role": "user", "content": rewrite_prompt})
 
                         # 재수정 호출
-                        response, dual_meta = dual_engine_write_audit_rewrite(agent_role, rewrite_messages, system_prompt)
+                        response, dual_meta = dual_engine_write_audit_rewrite(agent_role, rewrite_messages, system_prompt, session_id=current_session_id)
                         council_type = should_convene_council(agent_role, response, dual_meta=dual_meta)
                         continue
 
@@ -1583,9 +1686,9 @@ CEO는 하위 에이전트(`{agent_role}`)를 직접 호출할 수 없습니다.
                 if model_config == "claude_cli":
                     from config import CLI_PROFILES
                     profile = CLI_PROFILES.get(agent_role, "reviewer")
-                    response, _ = _call_model_or_cli("claude_cli", messages, system_prompt, profile)
+                    response, _ = _call_model_or_cli("claude_cli", messages, system_prompt, profile, current_session_id, agent_role)
                 else:
-                    response = call_llm(model_config, messages, system_prompt)
+                    response = call_llm(model_config, messages, system_prompt, current_session_id, agent_role)
                 stream = get_stream()
                 stream.log("ceo", agent_role, "request", agent_message)
                 stream.log(agent_role, "ceo", "response", response)
@@ -1673,22 +1776,50 @@ CEO는 하위 에이전트(`{agent_role}`)를 직접 호출할 수 없습니다.
 
         # 메타 정보에 추가 데이터 업데이트
         model_meta['latency_ms'] = elapsed_ms
+
+        # v2.6: Server Logger에 LLM 호출 기록
+        log_llm_call(
+            agent=agent_role,
+            provider=model_meta.get('provider', 'unknown'),
+            model=model_name,
+            tokens=model_meta.get('input_tokens', 0) + model_meta.get('output_tokens', 0),
+            cost=model_meta.get('cost', 0.0),
+            duration_ms=elapsed_ms,
+            success=True,
+            session_id=current_session_id
+        )
     except Exception as e:
         print(f"[Scorecard] Error: {e}")
+        log_error(f"Scorecard logging failed: {e}", agent=agent_role, exc_info=False)
+
+    # =========================================================================
+    # v2.6.1: Flow Monitor - 부트로더 원칙 준수 모니터링
+    # - 역할 침범, 잡담, JSON 계약 검증
+    # =========================================================================
+    flow_monitor = get_flow_monitor()
+    flow_result = flow_monitor.validate_output(agent_role, response, current_session_id or "no_session")
+    model_meta['flow_monitor'] = flow_result
+
+    if flow_result['violations']:
+        print(f"[FlowMonitor] WARN {agent_role} violation {len(flow_result['violations'])}건: {flow_result['violations'][:2]}")
+    else:
+        print(f"[FlowMonitor] OK {agent_role} output validated")
 
     # =========================================================================
     # v2.5: Output Contract 검증 (형식 게이트)
     # - CONTRACT_EXEMPT_AGENTS: Perplexity, Gemini 등 JSON 강제 불가 에이전트 제외
     # - ENFORCE_OUTPUT_CONTRACT: True면 Fail Fast, False면 Soft Landing
+    # - ABORT 메시지는 Contract 검증 건너뜀
     # =========================================================================
-    if agent_role in CONTRACT_REGISTRY and agent_role not in CONTRACT_EXEMPT_AGENTS:
+    is_abort_response = response.strip().startswith("# ABORT:")
+    if agent_role in CONTRACT_REGISTRY and agent_role not in CONTRACT_EXEMPT_AGENTS and not is_abort_response:
         success, validated_or_raw, error_msg = validate_output(response, agent_role)
         if success:
-            print(f"[FormatGate] ✅ {agent_role} 출력 검증 통과")
+            print(f"[FormatGate] OK {agent_role} output validated")
             model_meta['format_validated'] = True
             model_meta['validated_output'] = validated_or_raw.model_dump() if hasattr(validated_or_raw, 'model_dump') else None
         else:
-            print(f"[FormatGate] ❌ {agent_role} 형식 오류: {error_msg[:100]}")
+            print(f"[FormatGate] FAIL {agent_role} format error: {error_msg[:100]}")
             model_meta['format_validated'] = False
             model_meta['format_error'] = error_msg
 
@@ -1697,6 +1828,8 @@ CEO는 하위 에이전트(`{agent_role}`)를 직접 호출할 수 없습니다.
                 raise FormatGateError(
                     f"[{agent_role}] Output Contract 위반: {error_msg[:200]}"
                 )
+    elif is_abort_response:
+        print(f"[FormatGate] SKIP {agent_role} - ABORT response")
 
     if return_meta:
         return response, model_meta
@@ -1730,7 +1863,7 @@ def process_call_tags(pm_response: str, use_loop_breaker: bool = True) -> list:
         if use_loop_breaker:
             should_break, break_reason = check_loop(agent, message)
             if should_break:
-                print(f"[LoopBreaker] 🛑 루프 감지: {break_reason}")
+                print(f"[LoopBreaker] STOP loop detected: {break_reason}")
                 escalation_msg = get_loop_breaker().get_escalation_message()
 
                 results.append({
@@ -1742,7 +1875,7 @@ def process_call_tags(pm_response: str, use_loop_breaker: bool = True) -> list:
 
                 # CEO 에스컬레이션
                 if get_loop_breaker().should_escalate_to_ceo():
-                    print("[LoopBreaker] ⚠️ CEO 에스컬레이션 필요")
+                    print("[LoopBreaker] WARN CEO escalation required")
 
                 break  # 더 이상 에이전트 호출하지 않음
 
@@ -1755,8 +1888,8 @@ def process_call_tags(pm_response: str, use_loop_breaker: bool = True) -> list:
         if use_loop_breaker:
             should_break, break_reason = check_loop(f"{agent}_response", response)
             if should_break:
-                print(f"[LoopBreaker] 🛑 반복 응답 감지: {break_reason}")
-                response += f"\n\n---\n\n⚠️ **루프 브레이커 경고**: {break_reason}"
+                print(f"[LoopBreaker] STOP repeated response: {break_reason}")
+                response += f"\n\n---\n\n**[LoopBreaker Warning]**: {break_reason}"
 
         results.append({
             'agent': agent,

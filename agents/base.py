@@ -229,16 +229,11 @@ class APIClient:
 
     @classmethod
     def get_anthropic(cls):
-        """Anthropic 클라이언트"""
-        if cls._anthropic_client is None:
-            try:
-                from anthropic import Anthropic
-                import os
-                cls._anthropic_client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-            except ImportError:
-                print("[ERROR] anthropic not installed. Run: pip install anthropic")
-                return None
-        return cls._anthropic_client
+        """Anthropic 클라이언트 - DEPRECATED (v2.4.3: CLI 리다이렉트로 대체)"""
+        # v2.4.3: Claude API 직접 호출 금지 - CLI로 리다이렉트
+        # 이 메서드는 더 이상 사용되지 않음 (호환성 유지용)
+        print("[WARN] get_anthropic() is deprecated. Use CLI redirect instead.")
+        return None
 
     @classmethod
     def get_google(cls, model_id: str):
@@ -291,23 +286,20 @@ def call_llm(model_config: ModelConfig, system_prompt: str, user_input: str) -> 
             )
 
         elif provider == "anthropic":
-            client = APIClient.get_anthropic()
-            if not client:
-                return EngineResponse(content=None, error="Anthropic client not available")
+            # v2.4.3: Claude API → CLI 리다이렉트 (API 비용 0원)
+            from src.services.cli_supervisor import call_claude_cli
 
-            response = client.messages.create(
-                model=model_config.model_id,
-                system=system_prompt,
-                messages=[{"role": "user", "content": user_input}],
-                temperature=model_config.temperature,
-                max_tokens=model_config.max_tokens
-            )
+            # model_id로 프로필 결정 (opus=coder, sonnet=reviewer)
+            profile = "coder" if "opus" in model_config.model_id.lower() else "reviewer"
+
+            messages = [{"role": "user", "content": user_input}]
+            content = call_claude_cli(messages, system_prompt, profile)
 
             return EngineResponse(
-                content=response.content[0].text,
-                raw_response=response,
-                tokens_used=response.usage.input_tokens + response.usage.output_tokens if response.usage else 0,
-                model=model_config.model_id
+                content=content,
+                raw_response=None,
+                tokens_used=0,  # CLI는 토큰 추적 불가
+                model=f"claude_cli_{profile}"
             )
 
         elif provider == "google":

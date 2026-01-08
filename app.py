@@ -49,6 +49,10 @@ load_dotenv(env_path, override=True)
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "hattz-empire-secret-key-2024")
 
+# 서버 로거 초기화
+from src.utils.server_logger import logger, init_request_logging
+init_request_logging(app)
+
 # Flask-Login 초기화
 from src.utils.auth import init_login
 init_login(app)
@@ -120,10 +124,9 @@ if __name__ == '__main__':
         print(f"  Or use another port: python app.py --port 5001\n")
         exit(1)
 
-    print("\n" + "="*60)
-    print("HATTZ EMPIRE - Web Interface")
-    print(f"PID: {os.getpid()}")
-    print("="*60)
-    print("http://localhost:5000")
-    print("="*60 + "\n")
+    logger.info("="*60)
+    logger.info("HATTZ EMPIRE - Web Interface Started")
+    logger.info(f"PID: {os.getpid()}")
+    logger.info(f"URL: http://localhost:{PORT}")
+    logger.info("="*60)
     app.run(debug=True, host='0.0.0.0', port=PORT, use_reloader=False)

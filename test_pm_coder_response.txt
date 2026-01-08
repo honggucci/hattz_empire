@@ -1,0 +1,292 @@
+data: {"session_id": "AF4013DE-E9D9-4F59-B60F-2BC07D7B27E7", "stream_id": "3d84069a-e301-469e-81f3-f8ac48ef4e93"}
+
+data: {"stage": "thinking", "agent": "pm", "token_stats": {"usage_ratio": 0.0, "total_tokens": 12, "compaction_needed": false}}
+
+data: {"model_info": {"model_name": "Claude Sonnet 4", "model_id": "claude-sonnet-4-20250514", "tier": "standard", "reason": "default → agent 'pm' → standard", "provider": "anthropic", "ceo_prefix": null, "council": {"council_type": "pm", "verdict": "fail", "average_score": 5.0, "score_std": 0.0, "requires_ceo": false, "summary": "❌ 재수정 필요\n주요 우려: CLI 실행 오류 - 세션 또는 인프라 문제, CLI 실행 오류 - 세션 또는 인프라 문제, CLI 실행 오류 - 세션 또는 인프라 문제", "trigger_source": "manual", "judges": [{"persona": "회의론자", "icon": "🤨", "score": 5.0, "reasoning": "CLI 호출 실패: [CLI ERROR] 세션 충돌 지속 (재시도 초과)"}, {"persona": "완벽주의자", "icon": "🔬", "score": 5.0, "reasoning": "CLI 호출 실패: [CLI ERROR] CLI 호출 실패"}, {"persona": "현실주의자", "icon": "🎯", "score": 5.0, "reasoning": "CLI 호출 실패: [CLI ERROR] CLI 호출 실패"}, {"persona": "비관론자", "icon": "😰", "score": 5.0, "reasoning": "CLI 호출 실패: [CLI ERROR] 세션 충돌 지속 (재시도 초과)"}, {"persona": "낙관론자", "icon": "😊", "score": 5.0, "reasoning": "CLI 호출 실패: [CLI ERROR] 세션 충돌 지속 (재시도 초과)"}, {"persona": "악마의 변호인", "icon": "😈", "score": 5.0, "reasoning": "CLI 호출 실패: [CLI ERROR] 세션 충돌 지속 (재시도 초과)"}, {"persona": "보안 감시자", "icon": "🦅", "score": 5.0, "reasoning": "CLI 호출 실패: [CLI ERROR] 세션 충돌 지속 (재시도 초과)"}]}, "dual_engine": {"dual": false}, "latency_ms": 21462}, "agent": "pm"}
+
+data: {"stage": "responding", "agent": "pm"}
+
+data: {"token": "```json\n{\n "}
+
+data: {"token": " "}
+
+data: {"token": "\"intent\": "}
+
+data: {"token": "\"Python "}
+
+data: {"token": "hello "}
+
+data: {"token": "world "}
+
+data: {"token": "함수 "}
+
+data: {"token": "생성\",\n "}
+
+data: {"token": " "}
+
+data: {"token": "\"priority\": "}
+
+data: {"token": "\"P2\",\n "}
+
+data: {"token": " "}
+
+data: {"token": "\"plan\": "}
+
+data: {"token": "[\"함수 "}
+
+data: {"token": "구현\", "}
+
+data: {"token": "\"구문 "}
+
+data: {"token": "검증\", "}
+
+data: {"token": "\"테스트 "}
+
+data: {"token": "실행\"],\n "}
+
+data: {"token": " "}
+
+data: {"token": "\"dispatch\": "}
+
+data: {"token": "[\n "}
+
+data: {"token": " "}
+
+data: {"token": " "}
+
+data: {"token": " "}
+
+data: {"token": "{\"agent\": "}
+
+data: {"token": "\"coder\", "}
+
+data: {"token": "\"reason\": "}
+
+data: {"token": "\"Python "}
+
+data: {"token": "함수 "}
+
+data: {"token": "구현\", "}
+
+data: {"token": "\"input\": "}
+
+data: {"token": "\"hello "}
+
+data: {"token": "world를 "}
+
+data: {"token": "출력하는 "}
+
+data: {"token": "Python "}
+
+data: {"token": "함수 "}
+
+data: {"token": "작성. "}
+
+data: {"token": "함수명은 "}
+
+data: {"token": "hello_world()로 "}
+
+data: {"token": "하고, "}
+
+data: {"token": "print() "}
+
+data: {"token": "사용해서 "}
+
+data: {"token": "'hello "}
+
+data: {"token": "world' "}
+
+data: {"token": "출력\"}\n "}
+
+data: {"token": " "}
+
+data: {"token": "],\n "}
+
+data: {"token": " "}
+
+data: {"token": "\"success_criteria\": "}
+
+data: {"token": "[\"hello_world() "}
+
+data: {"token": "함수가 "}
+
+data: {"token": "'hello "}
+
+data: {"token": "world' "}
+
+data: {"token": "출력\", "}
+
+data: {"token": "\"구문 "}
+
+data: {"token": "오류 "}
+
+data: {"token": "없음\"],\n "}
+
+data: {"token": " "}
+
+data: {"token": "\"risk_flags\": "}
+
+data: {"token": "[],\n "}
+
+data: {"token": " "}
+
+data: {"token": "\"requires_ceo\": "}
+
+data: {"token": "false\n}\n```\n\n[CALL:coder]\nhello "}
+
+data: {"token": "world를 "}
+
+data: {"token": "출력하는 "}
+
+data: {"token": "Python "}
+
+data: {"token": "함수 "}
+
+data: {"token": "작성. "}
+
+data: {"token": "함수명은 "}
+
+data: {"token": "hello_world()로 "}
+
+data: {"token": "하고, "}
+
+data: {"token": "print() "}
+
+data: {"token": "사용해서 "}
+
+data: {"token": "'hello "}
+
+data: {"token": "world' "}
+
+data: {"token": "출력\n[/CALL]\n\n---\n\n## "}
+
+data: {"token": "🏛️ "}
+
+data: {"token": "PM "}
+
+data: {"token": "위원회 "}
+
+data: {"token": "판정\n\n❌ "}
+
+data: {"token": "재수정 "}
+
+data: {"token": "필요\n주요 "}
+
+data: {"token": "우려: "}
+
+data: {"token": "CLI "}
+
+data: {"token": "실행 "}
+
+data: {"token": "오류 "}
+
+data: {"token": "- "}
+
+data: {"token": "세션 "}
+
+data: {"token": "또는 "}
+
+data: {"token": "인프라 "}
+
+data: {"token": "문제, "}
+
+data: {"token": "CLI "}
+
+data: {"token": "실행 "}
+
+data: {"token": "오류 "}
+
+data: {"token": "- "}
+
+data: {"token": "세션 "}
+
+data: {"token": "또는 "}
+
+data: {"token": "인프라 "}
+
+data: {"token": "문제, "}
+
+data: {"token": "CLI "}
+
+data: {"token": "실행 "}
+
+data: {"token": "오류 "}
+
+data: {"token": "- "}
+
+data: {"token": "세션 "}
+
+data: {"token": "또는 "}
+
+data: {"token": "인프라 "}
+
+data: {"token": "문제\n "}
+
+data: {"pm_done": true, "pm_response": "```json\n{\n  \"intent\": \"Python hello world 함수 생성\",\n  \"priority\": \"P2\",\n  \"plan\": [\"함수 구현\", \"구문 검증\", \"테스트 실행\"],\n  \"dispatch\": [\n    {\"agent\": \"coder\", \"reason\": \"Python 함수 구현\", \"input\": \"hello world를 출력하는 Python 함수 작성. 함수명은 hello_world()로 하고, print() 사용해서 'hello world' 출력\"}\n  ],\n  \"success_criteria\": [\"hello_world() 함수가 'hello world' 출력\", \"구문 오류 없음\"],\n  \"risk_flags\": [],\n  \"requires_ceo\": false\n}\n```\n\n[CALL:coder]\nhello world를 출력하는 Python 함수 작성. 함수명은 hello_world()로 하고, print() 사용해서 'hello world' 출력\n[/CALL]\n\n---\n\n## 🏛️ PM 위원회 판정\n\n❌ 재수정 필요\n주요 우려: CLI 실행 오류 - 세션 또는 인프라 문제, CLI 실행 오류 - 세션 또는 인프라 문제, CLI 실행 오류 - 세션 또는 인프라 문제\n", "agent": "pm", "model_info": {"model_name": "Claude Sonnet 4", "model_id": "claude-sonnet-4-20250514", "tier": "standard", "reason": "default → agent 'pm' → standard", "provider": "anthropic", "ceo_prefix": null, "council": {"council_type": "pm", "verdict": "fail", "average_score": 5.0, "score_std": 0.0, "requires_ceo": false, "summary": "❌ 재수정 필요\n주요 우려: CLI 실행 오류 - 세션 또는 인프라 문제, CLI 실행 오류 - 세션 또는 인프라 문제, CLI 실행 오류 - 세션 또는 인프라 문제", "trigger_source": "manual", "judges": [{"persona": "회의론자", "icon": "🤨", "score": 5.0, "reasoning": "CLI 호출 실패: [CLI ERROR] 세션 충돌 지속 (재시도 초과)"}, {"persona": "완벽주의자", "icon": "🔬", "score": 5.0, "reasoning": "CLI 호출 실패: [CLI ERROR] CLI 호출 실패"}, {"persona": "현실주의자", "icon": "🎯", "score": 5.0, "reasoning": "CLI 호출 실패: [CLI ERROR] CLI 호출 실패"}, {"persona": "비관론자", "icon": "😰", "score": 5.0, "reasoning": "CLI 호출 실패: [CLI ERROR] 세션 충돌 지속 (재시도 초과)"}, {"persona": "낙관론자", "icon": "😊", "score": 5.0, "reasoning": "CLI 호출 실패: [CLI ERROR] 세션 충돌 지속 (재시도 초과)"}, {"persona": "악마의 변호인", "icon": "😈", "score": 5.0, "reasoning": "CLI 호출 실패: [CLI ERROR] 세션 충돌 지속 (재시도 초과)"}, {"persona": "보안 감시자", "icon": "🦅", "score": 5.0, "reasoning": "CLI 호출 실패: [CLI ERROR] 세션 충돌 지속 (재시도 초과)"}]}, "dual_engine": {"dual": false}, "latency_ms": 21462}}
+
+data: {"stage": "delegating", "total_agents": 1, "agents": ["coder"]}
+
+data: {"stage": "calling", "sub_agent": "coder", "task_id": "05d88056", "progress": "1/1", "message_preview": "hello world를 출력하는 Python 함수 작성. 함수명은 hello_world()로 하고, print() 사용해서 'hello world' 출력"}
+
+data: {"stage": "sub_agent_done", "sub_agent": "coder", "task_id": "05d88056", "progress": "1/1"}
+
+data: {"stage": "summarizing", "agent": "pm"}
+
+data: {"stage": "final_response", "agent": "pm"}
+
+data: {"token": "## ", "is_final": true}
+
+data: {"token": "CEO ", "is_final": true}
+
+data: {"token": "보고서\n\n**작업 ", "is_final": true}
+
+data: {"token": "완료:** ", "is_final": true}
+
+data: {"token": "Python ", "is_final": true}
+
+data: {"token": "hello ", "is_final": true}
+
+data: {"token": "world ", "is_final": true}
+
+data: {"token": "함수 ", "is_final": true}
+
+data: {"token": "생성\n\n**결과:**\n- ", "is_final": true}
+
+data: {"token": "`hello_world()` ", "is_final": true}
+
+data: {"token": "함수 ", "is_final": true}
+
+data: {"token": "구현 ", "is_final": true}
+
+data: {"token": "완료\n- ", "is_final": true}
+
+data: {"token": "`hello.py` ", "is_final": true}
+
+data: {"token": "파일에 ", "is_final": true}
+
+data: {"token": "저장\n- ", "is_final": true}
+
+data: {"token": "함수 ", "is_final": true}
+
+data: {"token": "호출 ", "is_final": true}
+
+data: {"token": "시 ", "is_final": true}
+
+data: {"token": "'hello ", "is_final": true}
+
+data: {"token": "world' ", "is_final": true}
+
+data: {"token": "출력\n\n**상태:** ", "is_final": true}
+
+data: {"token": "✅ ", "is_final": true}
+
+data: {"token": "성공적으로 ", "is_final": true}
+
+data: {"token": "완료\n\n**추가 ", "is_final": true}
+
+data: {"token": "조치:** ", "is_final": true}
+
+data: {"token": "불필요 ", "is_final": true}
+
+data: {"done": true, "full_response": "## CEO 보고서\n\n**작업 완료:** Python hello world 함수 생성\n\n**결과:**\n- `hello_world()` 함수 구현 완료\n- `hello.py` 파일에 저장\n- 함수 호출 시 'hello world' 출력\n\n**상태:** ✅ 성공적으로 완료\n\n**추가 조치:** 불필요", "session_id": "AF4013DE-E9D9-4F59-B60F-2BC07D7B27E7", "model_info": {"model_name": "Claude Sonnet 4", "model_id": "claude-sonnet-4-20250514", "tier": "standard", "reason": "execution_intent_or_code → EXEC (Claude CLI)", "provider": "anthropic", "ceo_prefix": null, "dual_engine": {"dual": false}, "latency_ms": 11245}, "agents_called": ["coder"]}
+

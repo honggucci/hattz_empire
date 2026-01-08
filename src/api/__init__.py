@@ -20,14 +20,15 @@ cost_bp = Blueprint('cost', __name__, url_prefix='/costs')
 monitor_bp = Blueprint('monitor', __name__, url_prefix='/api/monitor')
 events_bp = Blueprint('events', __name__, url_prefix='/api/events')
 metrics_bp = Blueprint('metrics', __name__, url_prefix='/metrics')
+analytics_bp = Blueprint('analytics', __name__, url_prefix='/api/analytics')
 
 
 def register_blueprints(app):
     """모든 Blueprint를 앱에 등록"""
-    from . import auth, chat, sessions, execute, rag_api, scores, router_api, tasks, breaker, council_api, health, costs, monitor, events, metrics
+    from . import auth, chat, sessions, execute, rag_api, scores, router_api, tasks, breaker, council_api, health, costs, monitor, events, metrics, analytics
     from .wpcn import wpcn_bp  # WPCN API
-    from .jobs import jobs_bp  # v2.2 Worker Jobs API
     from .rules import rules_bp  # Session Rules API
+    from .flow_quality import flow_bp  # v2.6.1 Flow Quality API
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(chat_bp)
@@ -45,5 +46,6 @@ def register_blueprints(app):
     app.register_blueprint(events_bp)  # SSE Events
     app.register_blueprint(metrics_bp)  # Prometheus Metrics
     app.register_blueprint(wpcn_bp)  # WPCN API
-    app.register_blueprint(jobs_bp)  # v2.2 Worker Jobs API
     app.register_blueprint(rules_bp)  # Session Rules API
+    app.register_blueprint(analytics_bp)  # v2.6 Analytics API
+    app.register_blueprint(flow_bp)  # v2.6.1 Flow Quality API

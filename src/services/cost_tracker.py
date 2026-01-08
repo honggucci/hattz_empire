@@ -170,7 +170,7 @@ def get_daily_costs(days: int = 7) -> List[Dict[str, Any]]:
                 FROM api_costs
                 WHERE created_at >= DATEADD(day, ?, GETDATE())
                 GROUP BY CAST(created_at AS DATE)
-                ORDER BY date DESC
+                ORDER BY date ASC
             """, (-days,))
 
             results = []
@@ -180,7 +180,8 @@ def get_daily_costs(days: int = 7) -> List[Dict[str, Any]]:
                     "call_count": row.call_count,
                     "total_input": row.total_input or 0,
                     "total_output": row.total_output or 0,
-                    "total_cost": float(row.total_cost or 0)
+                    "cost": float(row.total_cost or 0),  # JS에서 사용하는 필드명
+                    "total_cost": float(row.total_cost or 0)  # 레거시 호환
                 })
             return results
     except Exception as e:
@@ -188,8 +189,8 @@ def get_daily_costs(days: int = 7) -> List[Dict[str, Any]]:
         return []
 
 
-def get_model_breakdown(days: int = 30) -> List[Dict[str, Any]]:
-    """모델별 비용 분석"""
+def get_model_breakdown(days: int = 30) -> Dict[str, Any]:
+    """모델별 비용 분석 - JS 호환 형식"""
     try:
         with db.get_db_connection() as conn:
             cursor = conn.cursor()
@@ -205,28 +206,48 @@ def get_model_breakdown(days: int = 30) -> List[Dict[str, Any]]:
                 FROM api_costs
                 WHERE created_at >= DATEADD(day, ?, GETDATE())
                 GROUP BY model_id, model_tier
-                ORDER BY total_cost DESC
+                ORDER BY call_count DESC
             """, (-days,))
 
-            results = []
+            models = []
+            total_calls = 0
             for row in cursor.fetchall():
-                results.append({
+                calls = row.call_count or 0
+                total_calls += calls
+                models.append({
+                    "model": row.model_id,  # JS에서 사용하는 필드명
+                    "tier": row.model_tier,  # JS에서 사용하는 필드명
+                    "calls": calls,  # JS에서 사용하는 필드명
                     "model_id": row.model_id,
                     "model_tier": row.model_tier,
-                    "call_count": row.call_count,
+                    "call_count": calls,
                     "total_input": row.total_input or 0,
                     "total_output": row.total_output or 0,
                     "total_cost": float(row.total_cost or 0),
                     "avg_cost": float(row.avg_cost or 0)
                 })
-            return results
+
+            # 쏠림 현상 계산 (상위 3개 모델이 70% 이상이면 경고)
+            concentration_index = 0.0
+            concentration_warning = False
+            if total_calls > 0 and len(models) >= 3:
+                top3_calls = sum(m["calls"] for m in models[:3])
+                concentration_index = top3_calls / total_calls
+                concentration_warning = concentration_index > 0.7
+
+            return {
+                "models": models,
+                "total_calls": total_calls,
+                "concentration_index": round(concentration_index, 2),
+                "concentration_warning": concentration_warning
+            }
     except Exception as e:
         print(f"[CostTracker] Model breakdown error: {e}")
-        return []
+        return {"models": [], "total_calls": 0, "concentration_index": 0, "concentration_warning": False}
 
 
-def get_agent_breakdown(days: int = 30) -> List[Dict[str, Any]]:
-    """에이전트별 비용 분석"""
+def get_agent_breakdown(days: int = 30) -> Dict[str, Dict[str, Any]]:
+    """에이전트별 비용 분석 - JS 호환 객체 형식"""
     try:
         with db.get_db_connection() as conn:
             cursor = conn.cursor()
@@ -243,23 +264,25 @@ def get_agent_breakdown(days: int = 30) -> List[Dict[str, Any]]:
                 ORDER BY total_cost DESC
             """, (-days,))
 
-            results = []
+            results = {}
             for row in cursor.fetchall():
-                results.append({
-                    "agent_role": row.agent_role,
+                agent = row.agent_role or "unknown"
+                results[agent] = {
+                    "calls": row.call_count,  # JS에서 사용하는 필드명
+                    "cost": float(row.total_cost or 0),  # JS에서 사용하는 필드명
                     "call_count": row.call_count,
                     "total_input": row.total_input or 0,
                     "total_output": row.total_output or 0,
                     "total_cost": float(row.total_cost or 0)
-                })
+                }
             return results
     except Exception as e:
         print(f"[CostTracker] Agent breakdown error: {e}")
-        return []
+        return {}
 
 
-def get_tier_breakdown(days: int = 30) -> List[Dict[str, Any]]:
-    """티어별 비용 분석"""
+def get_tier_breakdown(days: int = 30) -> Dict[str, Dict[str, Any]]:
+    """티어별 비용 분석 - JS에서 객체 형태로 사용"""
     try:
         with db.get_db_connection() as conn:
             cursor = conn.cursor()
@@ -275,18 +298,20 @@ def get_tier_breakdown(days: int = 30) -> List[Dict[str, Any]]:
                 ORDER BY total_cost DESC
             """, (-days,))
 
-            results = []
+            results = {}
             for row in cursor.fetchall():
-                results.append({
-                    "tier": row.model_tier,
-                    "call_count": row.call_count,
+                tier = row.model_tier or "unknown"
+                results[tier] = {
+                    "calls": row.call_count,  # JS에서 사용하는 필드명
+                    "cost": float(row.total_cost or 0),  # JS에서 사용하는 필드명
+                    "call_count": row.call_count,  # 레거시 호환
                     "total_cost": float(row.total_cost or 0),
                     "avg_cost": float(row.avg_cost or 0)
-                })
+                }
             return results
     except Exception as e:
         print(f"[CostTracker] Tier breakdown error: {e}")
-        return []
+        return {}
 
 
 def get_summary(days: int = 30) -> Dict[str, Any]:
@@ -309,12 +334,24 @@ def get_summary(days: int = 30) -> Dict[str, Any]:
 
             row = cursor.fetchone()
             if row:
+                total_cost = float(row.total_cost or 0)
+                total_calls = row.total_calls or 0
+
+                # 일 평균 비용 계산
+                daily_average = total_cost / days if days > 0 else 0
+
+                # 월간 예상 비용 계산
+                monthly_estimate = daily_average * 30
+
                 return {
-                    "total_calls": row.total_calls or 0,
+                    "total_calls": total_calls,
+                    "total_cost": total_cost,  # JS에서 사용하는 필드명
+                    "total_cost_usd": total_cost,  # 레거시 호환
                     "total_input_tokens": row.total_input or 0,
                     "total_output_tokens": row.total_output or 0,
-                    "total_cost_usd": float(row.total_cost or 0),
                     "avg_cost_per_call": float(row.avg_cost_per_call or 0),
+                    "daily_average": round(daily_average, 6),
+                    "monthly_estimate": round(monthly_estimate, 2),
                     "period_days": days,
                     "first_call": row.first_call.isoformat() if row.first_call else None,
                     "last_call": row.last_call.isoformat() if row.last_call else None
@@ -324,10 +361,13 @@ def get_summary(days: int = 30) -> Dict[str, Any]:
 
     return {
         "total_calls": 0,
+        "total_cost": 0.0,
+        "total_cost_usd": 0.0,
         "total_input_tokens": 0,
         "total_output_tokens": 0,
-        "total_cost_usd": 0.0,
         "avg_cost_per_call": 0.0,
+        "daily_average": 0.0,
+        "monthly_estimate": 0.0,
         "period_days": days
     }
 
@@ -511,7 +551,7 @@ def get_usage_trends(days: int = 14) -> Dict[str, Any]:
 
 
 def get_efficiency_metrics(days: int = 30) -> Dict[str, Any]:
-    """비용 효율성 지표"""
+    """비용 효율성 지표 - JS 호환 형식"""
     try:
         with db.get_db_connection() as conn:
             cursor = conn.cursor()
@@ -529,14 +569,16 @@ def get_efficiency_metrics(days: int = 30) -> Dict[str, Any]:
                 GROUP BY model_tier
             """, (-days,))
 
-            tier_efficiency = []
+            # JS에서 객체 형태로 사용하므로 딕셔너리로 변환
+            tier_efficiency = {}
             for row in cursor.fetchall():
-                tier_efficiency.append({
-                    "tier": row.model_tier,
+                tier = row.model_tier or "unknown"
+                tier_efficiency[tier] = {
                     "avg_cost": float(row.avg_cost or 0),
+                    "calls": row.call_count,  # JS에서 사용하는 필드명
                     "tokens_per_dollar": int(row.tokens_per_dollar or 0),
                     "call_count": row.call_count
-                })
+                }
 
             # 예상 월간 비용
             cursor.execute("""
@@ -568,21 +610,22 @@ def get_efficiency_metrics(days: int = 30) -> Dict[str, Any]:
             """, (-days,))
 
             row = cursor.fetchone()
-            budget_ratio = 0
+            budget_ratio = 0.0
             if row and row.total_calls > 0:
-                budget_ratio = round((row.budget_calls or 0) / row.total_calls * 100, 1)
+                # JS에서는 비율(0.0~1.0)로 기대
+                budget_ratio = round((row.budget_calls or 0) / row.total_calls, 3)
 
             return {
                 "tier_efficiency": tier_efficiency,
                 "daily_avg_cost": round(daily_avg, 4),
                 "monthly_estimate": round(monthly_estimate, 2),
                 "daily_avg_calls": round(daily_calls, 1),
-                "budget_tier_ratio": budget_ratio,
+                "budget_tier_ratio": budget_ratio,  # 0.0~1.0 비율
                 "period_days": days
             }
     except Exception as e:
         print(f"[CostTracker] Efficiency error: {e}")
-        return {}
+        return {"tier_efficiency": {}, "budget_tier_ratio": 0.0, "monthly_estimate": 0.0}
 
 
 # 테이블 생성 (모듈 로드 시)

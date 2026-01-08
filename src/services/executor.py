@@ -231,13 +231,15 @@ def run_command(command: str, cwd: Optional[str] = None) -> ExecutionResult:
                     target=command
                 )
 
-        # 명령어 실행
+        # 명령어 실행 (encoding="utf-8"로 이모지/한글 처리)
         result = subprocess.run(
             command,
             shell=True,
             cwd=cwd,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=60  # 60초 타임아웃
         )
 
@@ -344,6 +346,8 @@ else:
             ["python", "-c", script],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=300,  # 5분 타임아웃
             cwd=wpcn_path
         )
@@ -384,6 +388,8 @@ def run_wpcn_optimize(symbol: str = "BTC-USDT", timeframe: str = "15m", optimize
              "--symbol", symbol, "--timeframe", timeframe, "--optimizer", optimizer],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=1800,  # 30분 타임아웃
             cwd=wpcn_path
         )
@@ -446,6 +452,8 @@ if results_path.exists():
             ["python", "-c", script],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=30,
             cwd=WPCN_BASE_PATH
         )
@@ -488,6 +496,8 @@ else:
             ["python", "-c", script],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=30,
             cwd=WPCN_BASE_PATH
         )

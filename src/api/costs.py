@@ -2,7 +2,7 @@
 Hattz Empire - Cost Management API
 비용 관리 및 분석 API
 """
-from flask import request, jsonify, render_template
+from flask import request, jsonify, redirect, url_for
 from flask_login import login_required
 
 from . import cost_bp
@@ -12,8 +12,8 @@ from src.services import cost_tracker as ct
 @cost_bp.route('/')
 @login_required
 def dashboard():
-    """비용 대시보드 페이지"""
-    return render_template('costs.html')
+    """비용 대시보드 -> admin으로 리다이렉트"""
+    return redirect(url_for('auth.admin'))
 
 
 @cost_bp.route('/summary')

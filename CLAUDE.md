@@ -1,4 +1,4 @@
-# Hattz Empire - AI Orchestration System (v2.5.5)
+# Hattz Empire - AI Orchestration System (v2.6.0)
 
 ## 프로젝트 개요
 비용 최적화 AI 팀 오케스트레이션 시스템. 비용 86% 절감 + 품질 유지 + JSONL 영속화.
@@ -86,7 +86,43 @@ EscalationLevel:
 
 ---
 
-## v2.5.5 아키텍처 (2026-01-07)
+## v2.5.5 부트로더 원칙 (2026-01-07)
+
+**핵심 철학**: FLOW는 프롬프트가 아니라 부트로더다
+
+### 부트로더 원칙
+1. **에이전트는 서로의 존재를 모른다.** PM만 전체를 안다.
+2. **에이전트는 대화하지 않는다.** 계약(JSON)만 주고받는다.
+3. **FLOW는 협업이 아니라 상태 전이다.**
+4. **역할 침범 = 프로토콜 위반 = INVALID 출력.**
+
+### 역할 경계 (HARD BLOCK)
+| 역할 | 허용 | 금지 |
+|------|------|------|
+| PM | 상태 전이, 라우팅 | 코드, 전략, 구현 |
+| Strategist | 옵션, 리스크, 추천 | 코드, 파일명, 함수명 |
+| Coder | 구현, diff | 전략, 대안 제시 |
+| QA | 테스트, 검증 | 구현 변경 |
+| Reviewer | 리스크 검토 | 코드 수정 |
+
+### GPT ↔ Claude 분업
+```
+GPT-5.2 (사고) ──→ PM DFA (판단) ──→ Claude (손)
+    │                   │                │
+    ▼                   ▼                ▼
+  전략 생성         상태 전이          코드 생성
+  옵션 분석         라우팅            diff 출력
+  리스크 평가       INVALID 차단      IMPLEMENTATION_BLOCKED
+```
+
+### 최종 경고 (v2.5.5 동결)
+1. **"조금 더 유연하게"라는 말이 나오면 바로 차단**
+2. **Semantic Guard 완화는 기술 부채가 아니라 범죄**
+3. **상태 추가 제안자는 설계자가 아니라 파괴자**
+
+---
+
+## v2.5.5 아키텍처 - RAG Agent Filter
 
 **핵심 변경**: RAG Agent Filter + 에이전트별 컨텍스트 주입
 
@@ -504,6 +540,74 @@ hattz_empire/
 - DB에 작업 이력 저장
 
 ## 최근 작업 내역
+
+### 세션 12 (2026-01-08) - 문서 정리 + 세션 복구
+
+문서 중복 제거 및 README 개편:
+
+1. **README.md 전면 개편**
+   - ai_team_아키텍쳐.md 내용으로 교체 (35줄 → 340줄)
+   - v2.6.0 버전 뱃지 추가
+   - 설치/실행 가이드, PM DFA, Dual Engine 테이블, Council 설명 포함
+   - 버전 히스토리 테이블 추가
+
+2. **중복 문서 삭제**
+   - PROMPT.md (527줄) 삭제 - CLAUDE.md와 90% 중복
+   - ai_team_아키텍쳐.md (360줄) 삭제 - README로 통합
+   - 총 887줄 중복 제거
+
+3. **scripts/sync_version.py 업데이트**
+   - 삭제된 파일 참조 제거
+   - README.md 버전 뱃지 패턴 추가
+
+4. **chat.html 푸터 수정**
+   - "희망회로 금지" → GitHub 주소로 변경
+   - `github.com/hattz/hattz-empire | Hattz Empire v2.6.0`
+
+5. **DB 세션 복구**
+   - 32개 삭제된 세션 복구 (is_deleted=0)
+   - 웹페이지 챗 히스토리 정상 표시
+
+6. **서버 재시작**
+   - Flask + ngrok 터널 재시작
+   - https://caitlyn-supercivilized-intrudingly.ngrok-free.app
+
+---
+
+### 세션 11 (2026-01-07) - v2.6.0 Persona Pack 최신화
+
+에이전트 페르소나 파일(.claude/agents/)을 현재 아키텍처에 맞게 최신화:
+
+1. **GLOBAL_RULES.md 업데이트** (v2.5.5 → v2.6.0)
+   - Dual Engine 아키텍처 테이블 추가
+   - PM State Machine 섹션 추가 (DISPATCH → RETRY → BLOCKED → ESCALATE → DONE)
+   - 역할 경계 테이블에 Analyst, Researcher 추가
+   - 버전 히스토리 섹션 추가
+
+2. **Dual Engine 역할별 모델 매핑 문서화**
+   - coder.md: Writer=Claude CLI Opus 4.5, Auditor/Stamp=Claude CLI Sonnet 4
+   - strategist.md: Writer=GPT-5.2 Thinking Extended, Auditor/Stamp=Claude CLI Sonnet 4
+   - researcher.md: Writer=Perplexity Sonar Pro, Auditor/Stamp=Claude CLI Sonnet 4
+   - excavator.md: Writer=GPT-5.2 Thinking Extended, Auditor/Stamp=Claude CLI Sonnet 4
+
+3. **pm.md 업데이트**
+   - State Machine DFA 다이어그램 추가
+   - Retry Escalation 섹션 추가 (SELF_REPAIR → ROLE_SWITCH → HARD_FAIL)
+   - 호출 가능 에이전트 목록에 excavator 추가
+
+4. **council.md 업데이트**
+   - 7개 페르소나 설명 추가 (Skeptic, Perfectionist, Pragmatist, Pessimist, Optimist, Devil's Advocate, Security Hawk)
+   - 5개 위원회 유형 문서화
+
+5. **analyst.md 업데이트**
+   - Single Engine 명시 (Gemini 2.0 Flash)
+   - 프로젝트 컨텍스트 자동 주입 기능 문서화
+
+6. **비용 모니터링 스크립트** (check_costs.py)
+   - agent_logs 테이블에서 시간별 비용 조회
+   - Claude Code CLI 자체 비용과 hattz_empire 앱 비용 분리 확인
+
+---
 
 ### 세션 10 (2026-01-07) - v2.5.5 RAG Agent Filter
 

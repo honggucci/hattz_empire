@@ -43,7 +43,26 @@
       "Bash(start cmd /c \"python app.py\")",
       "Bash(ngrok config check:*)",
       "Bash(start cmd /c \"python c:/Users/hahonggu/Desktop/coin_master/hattz_empire/app.py\")",
-      "Bash(start cmd /c \"ngrok http 5000 --domain=caitlyn-supercivilized-intrudingly.ngrok-free.app\")"
+      "Bash(start cmd /c \"ngrok http 5000 --domain=caitlyn-supercivilized-intrudingly.ngrok-free.app\")",
+      "Bash(start cmd /c \"cd C:\\\\Users\\\\hahonggu\\\\Desktop\\\\coin_master\\\\hattz_empire && python app.py\")",
+      "Bash(cat:*)",
+      "Bash(xargs -I {} bash -c \"echo ''=== {} ==='' && head -5 ''{}''\")",
+      "Bash(ls \"c:\\\\Users\\\\hahonggu\\\\Desktop\\\\coin_master\\\\wpcn\\\\src\\\\wpcn\\\\_03_common\"\" 2>/dev/null || dir \"c:UsershahongguDesktopcoin_masterwpcnsrcwpcn_03_common\"\")",
+      "Bash(cd:*)",
+      "Bash(git tag:*)",
+      "Bash(del c:UsershahongguDesktopcoin_masterhattz_empirecheck_costs.py)",
+      "Bash(claude config:*)",
+      "Bash(claude /config)",
+      "Bash(MEDIUM)",
+      "Bash(del \"c:\\\\Users\\\\hahonggu\\\\Desktop\\\\coin_master\\\\hattz_empire\\\\src\\\\api\\\\jobs.py\")",
+      "Bash(if not exist \"c:\\\\Users\\\\hahonggu\\\\Desktop\\\\coin_master\\\\hattz_empire\\\\logs\" mkdir \"c:\\\\Users\\\\hahonggu\\\\Desktop\\\\coin_master\\\\hattz_empire\\\\logs\")",
+      "Bash(wc:*)",
+      "Bash(del \"c:\\\\Users\\\\hahonggu\\\\Desktop\\\\coin_master\\\\hattz_empire\\\\ai_team_아키텍쳐.md\")",
+      "Bash(del \"c:\\\\Users\\\\hahonggu\\\\Desktop\\\\coin_master\\\\hattz_empire\\\\PROMPT.md\")",
+      "Bash(start cmd /k \"ngrok http 5000 --domain=caitlyn-supercivilized-intrudingly.ngrok-free.app\")",
+      "Bash(start cmd /k \"cd C:\\\\Users\\\\hahonggu\\\\Desktop\\\\coin_master\\\\hattz_empire && python app.py\")",
+      "Bash(where:*)",
+      "Bash(start cmd /c \"cd /d c:\\\\Users\\\\hahonggu\\\\Desktop\\\\coin_master\\\\hattz_empire && python app.py\")"
     ]
   }
 }

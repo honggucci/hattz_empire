@@ -55,6 +55,9 @@ from src.services.task_events import emit_progress, emit_stage_change, emit_comp
 import src.services.database as db
 import src.services.executor as executor
 
+# v2.6: Server Logger
+from src.utils.server_logger import logger, log_error
+
 # Control Module (Session Rules System)
 from src.control import (
     StaticChecker,
@@ -99,6 +102,14 @@ from src.services.router import quick_route, AgentType
 # v2.3 Context Management
 from src.context.counter import TokenCounter
 from src.context.compactor import Compactor
+
+# v2.5.4 PM Decision Machine
+from src.core.decision_machine import (
+    get_decision_machine,
+    process_pm_output,
+    PMDecision,
+    DecisionOutput
+)
 
 # =============================================================================
 # v2.3 세션별 상태 관리
@@ -316,7 +327,7 @@ def auto_route_agent(user_message: str, default_agent: str = "pm") -> tuple[str,
         return selected, route_info
 
     except Exception as e:
-        print(f"[Router] Error: {e}, falling back to {default_agent}")
+        log_error(f"Router failed: {e}", error_type="ROUTER_ERROR")
         return default_agent, {"routed": False, "error": str(e)}
 
 
@@ -417,6 +428,12 @@ def chat_stream():
     if not user_message:
         return jsonify({'error': 'Message required'}), 400
 
+    # ===== v2.6.2 Dual Loop: "최고!" / "best!" 프리픽스 감지 =====
+    # GPT-5.2 <-> Claude Opus 핑퐁 루프 실행
+    dual_loop_prefixes = ["최고!", "최고! ", "best!", "best! ", "BEST!", "BEST! "]
+    if any(user_message.startswith(p) for p in dual_loop_prefixes):
+        return _handle_dual_loop_stream(data, user_message)
+
     # [PROJECT: xxx] 태그에서 프로젝트 추출
     current_project, _ = extract_project_from_message(user_message)
 
@@ -458,7 +475,7 @@ def chat_stream():
         else:
             print(f"[Hook] Pre-run failed: {hook_result['error']}")
     except Exception as e:
-        print(f"[Hook] Pre-run error: {e}")
+        log_error(f"Pre-run hook failed: {e}", session_id=current_session_id, error_type="HOOK_ERROR")
 
     # DB에 사용자 메시지 저장
     db.add_message(current_session_id, 'user', user_message, agent_role)
@@ -563,9 +580,39 @@ def chat_stream():
 
             pm_response = ' '.join(full_response)
 
+            # =================================================================
+            # v2.5.4: PM Decision Machine - JSON → 정형화된 의사결정
+            # =================================================================
+            pm_decision: DecisionOutput = None
+            try:
+                # PM 응답에서 JSON 추출 시도
+                import re
+                json_match = re.search(r'\{[\s\S]*\}', pm_response)
+                if json_match:
+                    pm_json = json.loads(json_match.group(0))
+                    pm_decision = process_pm_output(pm_json)
+
+                    # Decision Machine 결과 클라이언트에 전송
+                    yield f"data: {json.dumps({'pm_decision': pm_decision.to_dict()}, ensure_ascii=False)}\n\n"
+                    print(f"[DecisionMachine] decision={pm_decision.decision.value}, confidence={pm_decision.confidence}")
+
+                    # 낮은 confidence 경고
+                    if pm_decision.confidence < 0.7:
+                        yield f"data: {json.dumps({'decision_warning': {'message': 'PM 응답 품질 낮음', 'confidence': pm_decision.confidence}}, ensure_ascii=False)}\n\n"
+
+                    # BLOCKED 처리
+                    if pm_decision.decision == PMDecision.BLOCKED:
+                        yield f"data: {json.dumps({'decision_blocked': {'reason': pm_decision.summary}}, ensure_ascii=False)}\n\n"
+                        print(f"[DecisionMachine] BLOCKED: {pm_decision.summary}")
+
+            except json.JSONDecodeError:
+                print(f"[DecisionMachine] PM 응답이 JSON 형식이 아님 (CALL 태그 모드일 수 있음)")
+            except Exception as e:
+                print(f"[DecisionMachine] 처리 오류: {e}")
+
             # PM 응답 완료 (단, CALL 태그가 있으면 아직 done이 아님)
             yield f"data: {json.dumps({'pm_done': True, 'pm_response': pm_response, 'agent': agent_role, 'model_info': model_meta}, ensure_ascii=False)}\n\n"
-            db.add_message(session_id, 'assistant', pm_response, agent_role)
+            db.add_message(session_id, 'assistant', pm_response, agent_role, model_id=model_meta.get('model_name'))
 
             # =================================================================
             # 팩트체크: PM 응답의 거짓말/환각 탐지
@@ -749,7 +796,7 @@ def chat_stream():
                     })
 
                     # DB에 하위 에이전트 응답 저장 (내부 기록용, 웹에는 표시 안 함)
-                    db.add_message(session_id, 'assistant', f"[{sub_agent.upper()}]\n{sub_response}", sub_agent, is_internal=True)
+                    db.add_message(session_id, 'assistant', f"[{sub_agent.upper()}]\n{sub_response}", sub_agent, model_id=sub_meta.get('model_name'), is_internal=True)
 
                 # 모든 하위 에이전트 완료 - PM이 결과 종합
                 if call_results:
@@ -775,7 +822,7 @@ def chat_stream():
                         yield f"data: {json.dumps({'token': word + ' ', 'is_final': True}, ensure_ascii=False)}\n\n"
                         time.sleep(0.02)
 
-                    db.add_message(session_id, 'assistant', final_response, agent_role)
+                    db.add_message(session_id, 'assistant', final_response, agent_role, model_id=final_meta.get('model_name'))
 
                     # 모든 작업 완료
                     yield f"data: {json.dumps({'done': True, 'full_response': final_response, 'session_id': session_id, 'model_info': final_meta, 'agents_called': [c['agent'] for c in call_results]}, ensure_ascii=False)}\n\n"
@@ -860,6 +907,7 @@ def kill_all_cli():
         result = kill_all_cli_processes()
         return jsonify({'status': 'success', **result})
     except Exception as e:
+        log_error(f"Kill all CLI failed: {e}", error_type="CLI_ERROR")
         return jsonify({'status': 'error', 'error': str(e)}), 500
 
 
@@ -1280,7 +1328,7 @@ def _execute_chat_job(job_id: str):
                     })
 
                     # DB에 하위 에이전트 응답 저장
-                    db.add_message(session_id, 'assistant', f"[{sub_agent.upper()}]\n{sub_response}", sub_agent, is_internal=True)
+                    db.add_message(session_id, 'assistant', f"[{sub_agent.upper()}]\n{sub_response}", sub_agent, model_id=sub_meta.get('model_name'), is_internal=True)
 
                 except Exception as e:
                     print(f"[ChatJob] Sub-agent error {sub_agent}: {e}")
@@ -1294,18 +1342,18 @@ def _execute_chat_job(job_id: str):
                 final_response, final_meta = call_agent(followup_prompt, agent_role, return_meta=True)
 
                 # 최종 응답 저장
-                db.add_message(session_id, 'assistant', final_response, agent_role)
+                db.add_message(session_id, 'assistant', final_response, agent_role, model_id=final_meta.get('model_name'))
 
                 job['response'] = final_response
                 job['model_info'] = final_meta
             else:
                 # CALL은 있었지만 결과 없음
-                db.add_message(session_id, 'assistant', response, agent_role)
+                db.add_message(session_id, 'assistant', response, agent_role, model_id=model_meta.get('model_name'))
                 job['response'] = response
                 job['model_info'] = model_meta
         else:
             # CALL 태그 없음 - PM 응답만
-            db.add_message(session_id, 'assistant', response, agent_role)
+            db.add_message(session_id, 'assistant', response, agent_role, model_id=model_meta.get('model_name'))
             job['response'] = response
             job['model_info'] = model_meta
 
@@ -1429,3 +1477,100 @@ def list_chat_jobs():
         'jobs': jobs[:20],  # 최근 20개만
         'total': len(jobs)
     })
+
+
+# =============================================================================
+# v2.6.2 Dual Loop Handler
+# =============================================================================
+
+def _handle_dual_loop_stream(data: dict, user_message: str) -> Response:
+    """
+    "최고!" 프리픽스로 시작하는 요청을 Dual Loop로 처리
+
+    GPT-5.2 (Strategist/Reviewer) <-> Claude Opus (Coder) 핑퐁 루프
+
+    흐름:
+    1. GPT-5.2 Strategist: 설계/분석/방향 제시
+    2. Claude Opus Coder: 구현/코드 작성
+    3. GPT-5.2 Reviewer: 리뷰/승인 여부 결정
+    4. APPROVE -> 완료, REVISE -> 다음 iteration (최대 5회)
+    """
+    from src.services.dual_loop import run_dual_loop
+
+    client_session_id = data.get('session_id')
+
+    # 프리픽스 제거 ("최고!" / "best!")
+    task = user_message
+    for prefix in ["최고! ", "최고!", "best! ", "best!", "BEST! ", "BEST!"]:
+        if task.startswith(prefix):
+            task = task[len(prefix):].strip()
+            break
+
+    # [PROJECT: xxx] 태그에서 프로젝트 추출
+    current_project, task = extract_project_from_message(task)
+
+    # 세션 관리
+    current_session_id = get_current_session()
+    if client_session_id:
+        current_session_id = client_session_id
+        set_current_session(client_session_id)
+    elif not current_session_id:
+        current_session_id = db.create_session(agent='dual_loop', project=current_project)
+        set_current_session(current_session_id)
+
+    # DB에 사용자 메시지 저장
+    db.add_message(current_session_id, 'user', user_message, 'dual_loop')
+
+    def generate():
+        """SSE 스트림으로 Dual Loop 진행 상황 전송"""
+        try:
+            # 시작 알림
+            yield f"data: {json.dumps({'type': 'dual_loop_start', 'task': task[:100]})}\n\n"
+
+            final_result = None
+
+            for event in run_dual_loop(task, current_session_id, current_project):
+                stage = event.get('stage', '')
+                iteration = event.get('iteration', 0)
+                content = event.get('content', '')
+
+                # 진행 상황 전송
+                sse_event = {
+                    'type': 'dual_loop_progress',
+                    'stage': stage,
+                    'iteration': iteration,
+                    'content': content[:500] if len(content) > 500 else content,
+                }
+
+                if 'verdict' in event:
+                    sse_event['verdict'] = event['verdict']
+
+                yield f"data: {json.dumps(sse_event, ensure_ascii=False)}\n\n"
+
+                # 완료/중단 시 최종 결과 저장
+                if stage in ['complete', 'abort', 'max_iterations', 'error']:
+                    final_result = event
+
+            # 최종 결과 전송
+            if final_result:
+                final_content = final_result.get('content', '')
+
+                # DB에 최종 결과 저장
+                db.add_message(
+                    current_session_id,
+                    'assistant',
+                    final_content,
+                    'dual_loop'
+                )
+
+                yield f"data: {json.dumps({'type': 'dual_loop_complete', 'result': final_result}, ensure_ascii=False)}\n\n"
+
+            yield f"data: {json.dumps({'done': True})}\n\n"
+
+        except Exception as e:
+            error_msg = f"Dual Loop error: {str(e)}"
+            log_error(error_msg, session_id=current_session_id, error_type="DUAL_LOOP_ERROR")
+            yield f"data: {json.dumps({'type': 'error', 'message': error_msg})}\n\n"
+            yield f"data: {json.dumps({'done': True})}\n\n"
+
+    return Response(generate(), mimetype='text/event-stream')

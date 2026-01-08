@@ -15,9 +15,9 @@ for /f "tokens=2" %%a in ('tasklist ^| findstr python') do (
 )
 timeout /t 2 /nobreak >nul
 
-:: Start Flask in background
+:: Start Flask in background (no window)
 echo [2/4] Starting Flask server...
-start /B cmd /c "python app.py > logs\flask.log 2>&1"
+start /B "" python app.py > logs\flask.log 2>&1
 timeout /t 3 /nobreak >nul
 
 :: Check Flask is running
@@ -29,9 +29,9 @@ if %errorlevel% neq 0 (
 )
 echo       Flask running on http://localhost:5000
 
-:: Start ngrok
+:: Start ngrok (no window)
 echo [3/4] Starting ngrok tunnel...
-start /B cmd /c "ngrok http 5000 --domain=caitlyn-supercivilized-intrudingly.ngrok-free.app > logs\ngrok.log 2>&1"
+start /B "" ngrok http 5000 --domain=caitlyn-supercivilized-intrudingly.ngrok-free.app > logs\ngrok.log 2>&1
 timeout /t 3 /nobreak >nul
 
 echo [4/4] Services started!

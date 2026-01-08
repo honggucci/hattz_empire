@@ -187,7 +187,7 @@ class EmbeddingQueue:
         logger.info("[EmbeddingQueue] Worker loop ended")
 
     def _process_task(self, task: EmbeddingTask, rag):
-        """개별 작업 처리"""
+        """개별 작업 처리 (v2.5: agent 전달)"""
         rag.index_document(
             source_type=task.task_type.value,
             source_id=task.source_id,
@@ -195,6 +195,7 @@ class EmbeddingQueue:
             metadata=task.metadata,
             project=task.project,
             source=task.source,
+            agent=task.metadata.get("agent") if task.metadata else None,
         )
 
     def get_stats(self) -> Dict[str, Any]:
