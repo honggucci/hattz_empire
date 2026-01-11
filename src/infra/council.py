@@ -12,7 +12,7 @@ v2.3.1 개선사항:
 import asyncio
 import json
 from datetime import datetime
-from typing import Dict, List, Optional, Callable, Any
+from typing import Dict, List, Optional, Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from statistics import mean, stdev

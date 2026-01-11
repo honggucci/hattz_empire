@@ -24,7 +24,7 @@ v2.1 핵심 변경:
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any
 import re
 import os
 from src.services import cost_tracker
@@ -179,8 +179,8 @@ class HattzRouter:
         # 에이전트 역할 → 기본 티어 매핑 (v2.1)
         # =====================================================================
         self.agent_to_tier = {
-            # SAFETY - PM은 Opus 4.5 (똑똑한 라우터 필요)
-            "pm": ModelTier.SAFETY,           # PM은 뇌다. Opus 4.5 사용
+            # v2.6.4: PM은 EXEC 티어 (Claude CLI Sonnet 4 via config.py)
+            "pm": ModelTier.EXEC,             # PM은 config.py 설정 따름 (Sonnet 4)
             "excavator": ModelTier.STANDARD,  # 의도 정제 (요구사항/제약/수용기준)
 
             # VIP_THINKING - 깊은 추론 (GPT-5.2 pro high) - 조건부만
@@ -273,12 +273,14 @@ class HattzRouter:
         msg = (message or "").strip()
         msg_lower = msg.lower()
 
-        # 0. PM은 무조건 Opus 4.5 (v2.4.4 - PM 고정)
-        #    PM은 "뇌"이므로 키워드/실행의도 체크 건너뛰고 바로 SAFETY 티어
+        # 0. PM은 config.py 설정 직접 사용 (v2.6.4)
+        #    쿼리 분석 없이 바로 agent_to_tier 매핑 사용
         if agent_role == "pm":
+            tier = self.agent_to_tier.get("pm", ModelTier.EXEC)
+            model = self._get_model_by_tier(tier)
             return self._create_decision(
-                self.VIP_AUDIT_MODEL,
-                "pm_fixed → SAFETY (Opus 4.5)",
+                model,
+                f"pm → {tier.value} (config.py)",
                 context_size,
                 escalate_to=None
             )
@@ -488,10 +490,19 @@ class HattzRouter:
         """Anthropic API → CLI 리다이렉트 (v2.4.3 - API 비용 0원)"""
         from src.services.cli_supervisor import call_claude_cli
 
-        # model_id로 프로필 결정 (opus=coder, sonnet=reviewer)
-        profile = "coder" if "opus" in spec.model_id.lower() else "reviewer"
+        # v2.6.5: agent_role 기반 profile 결정
+        # - PM: profile=None (pm.md 페르소나만 사용, 추가 규칙 주입 안함)
+        # - coder: profile="coder" (코딩 규칙)
+        # - qa: profile="qa" (QA 규칙)
+        # - 나머지: model_id로 결정 (opus=coder, sonnet=reviewer)
+        if agent_role == "pm":
+            profile = None  # PM은 pm.md 페르소나만 사용
+        elif agent_role in ("coder", "qa", "reviewer"):
+            profile = agent_role
+        else:
+            profile = "coder" if "opus" in spec.model_id.lower() else "reviewer"
 
-        return call_claude_cli(messages, system_prompt, profile)
+        return call_claude_cli(messages, system_prompt, profile, session_id)
 
     def _call_openai(self, spec: ModelSpec, messages: list, system_prompt: str, session_id: str = None, agent_role: str = None) -> str:
         """OpenAI API 호출 + 비용 기록"""

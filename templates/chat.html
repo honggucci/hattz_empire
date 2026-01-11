@@ -23,6 +23,10 @@
 
             <div class="sidebar-actions">
                 <button id="new-chat-btn" class="btn-primary">+ New Chat</button>
+                <button id="continue-session-btn" class="btn-secondary" title="이전 세션에서 이어가기">
+                    <span class="btn-icon">🔗</span>
+                    <span class="btn-text">이어가기</span>
+                </button>
             </div>
 
             <div class="session-list">
@@ -61,12 +65,24 @@
                     <span id="current-agent">PM</span>
                 </div>
                 <div class="header-right">
-                    <span class="status">
-                        <span class="status-dot"></span>
-                        <span id="status-text">Ready</span>
-                    </span>
+                    <!-- v2.6.4 Mode Selection Buttons (헤더에 배치) -->
+                    <div class="mode-selector">
+                        <button class="mode-btn active" data-mode="normal" title="PM (Claude Sonnet 4) - 정보 조회, 간단한 대화">
+                            <span class="mode-icon">💬</span>
+                            <span class="mode-label">일반</span>
+                        </button>
+                        <button class="mode-btn" data-mode="discuss" title="Claude Opus - 깊은 대화, 인사이트 발굴">
+                            <span class="mode-icon">🧠</span>
+                            <span class="mode-label">논의</span>
+                        </button>
+                        <button class="mode-btn" data-mode="code" title="4단계 파이프라인 (전략→코더→QA→리뷰) - 완벽한 품질">
+                            <span class="mode-icon">💻</span>
+                            <span class="mode-label">코딩</span>
+                        </button>
+                    </div>
                     <div class="admin-dropdown">
                         <button class="admin-dropdown-btn" id="admin-dropdown-btn">
+                            <span class="status-dot"></span>
                             <span>{{ current_user.username if current_user.is_authenticated else '메뉴' }}</span>
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
                                 <path d="M6 9l6 6 6-6"/>
@@ -154,10 +170,36 @@
                     </button>
                 </div>
                 <div class="input-hint">
-                    <span><a href="https://github.com/hattz/hattz-empire" target="_blank" style="color: inherit; text-decoration: none;">github.com/hattz/hattz-empire</a> | Hattz Empire v2.6.0</span>
+                    <span><a href="https://github.com/hattz/hattz-empire" target="_blank" style="color: inherit; text-decoration: none;">github.com/hattz/hattz-empire</a> | Hattz Empire v2.6.5</span>
                 </div>
             </div>
         </main>
+
+        <!-- Session Continue Modal (v2.6.9) -->
+        <div id="session-continue-modal" class="modal-overlay hidden">
+            <div class="modal-content session-continue-modal">
+                <div class="modal-header">
+                    <h3>🔗 이전 세션에서 이어가기</h3>
+                    <button class="modal-close-btn" id="close-continue-modal">×</button>
+                </div>
+                <div class="modal-body">
+                    <p class="modal-description">이어갈 세션을 선택하세요. 선택한 세션의 요약과 최근 대화가 새 세션에 주입됩니다.</p>
+                    <div class="session-search">
+                        <input type="text" id="session-search-input" placeholder="세션 검색..." />
+                    </div>
+                    <div class="session-select-list" id="session-select-list">
+                        <!-- 세션 목록이 여기에 동적으로 추가됨 -->
+                    </div>
+                    <div class="selected-session-preview" id="selected-session-preview">
+                        <div class="preview-placeholder">세션을 선택하면 미리보기가 표시됩니다</div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn-secondary" id="cancel-continue-btn">취소</button>
+                    <button class="btn-primary" id="confirm-continue-btn" disabled>새 세션 시작</button>
+                </div>
+            </div>
+        </div>
 
         <!-- Background Tasks Status Widget -->
         <div id="bg-tasks-widget" class="bg-tasks-widget hidden">

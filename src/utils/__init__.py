@@ -1,7 +1,4 @@
 """
 Hattz Empire - Utils Module
-유틸리티 (auth, context_loader, math_utils)
+유틸리티 (auth, context_loader, server_logger)
 """
-
-from .math_utils import fibonacci, fibonacci_sequence
-

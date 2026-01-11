@@ -9,7 +9,6 @@ CEO 완성본 - 실패/중단 사유 표준 코드로 기록
 4. 감사 로그 + 이벤트 발행
 """
 from __future__ import annotations
-from typing import Optional
 from datetime import datetime
 from enum import Enum
 

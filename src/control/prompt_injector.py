@@ -84,10 +84,10 @@ def make_worker_context(session_rules: SessionRules) -> str:
 - Rules Hash: {session_rules.rules_hash()}
 
 [RULES SUMMARY]
-- Market Order: {session_rules.rules.trading.market_order}
-- Max Leverage: {session_rules.rules.trading.max_leverage}x
 - Secrets Hardcoding: {session_rules.rules.code.secrets_hardcoding}
+- Forbid Infinite Loop: {session_rules.rules.code.forbid_infinite_loop}
 - Allow Skip Tests: {session_rules.rules.quality.allow_skip_tests}
+- Max Files Changed: {session_rules.rules.quality.max_files_changed}
 
 위 규칙을 준수하여 작업하세요.
 """

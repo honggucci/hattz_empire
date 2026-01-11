@@ -4,7 +4,7 @@ Dual Loop Service - GPT-5.2 <-> Claude Opus Ping-Pong
 CEO가 "최고!" 프리픽스로 요청하면:
 1. GPT-5.2 (Strategist): 설계/분석/방향 제시
 2. Claude CLI Opus (Coder): 구현/코드 작성
-3. GPT-5.2 (Reviewer): 리뷰/승인 여부 결정
+3. Claude CLI Opus (Reviewer): 리뷰/승인 여부 결정
 4. APPROVE -> 완료, REVISE -> 다음 iteration
 
 최대 5회 반복 후 자동 종료
@@ -19,6 +19,9 @@ from enum import Enum
 from src.core.llm_caller import call_llm
 from src.services.cli_supervisor import call_claude_cli
 from config import MODELS
+
+# DB 저장 (v2.6.2 - Dual Loop 대화 영속화)
+from src.services.database import add_message
 
 
 class LoopVerdict(Enum):
@@ -129,8 +132,8 @@ Apply these fixes to improve the implementation."""
         response = call_claude_cli(messages, system_prompt, profile="coder")
         return response
 
-    def _call_gpt_reviewer(self, task: str, strategy: str, implementation: str) -> Tuple[LoopVerdict, str]:
-        """GPT-5.2 Reviewer 호출 - 리뷰/승인"""
+    def _call_opus_reviewer(self, task: str, strategy: str, implementation: str) -> Tuple[LoopVerdict, str]:
+        """Claude Opus Reviewer 호출 - 리뷰/승인"""
         system_prompt = """You are a Code Reviewer.
 
 Review the implementation against the strategy and original task.
@@ -138,8 +141,8 @@ Review the implementation against the strategy and original task.
 Output JSON only:
 {
     "verdict": "APPROVE" | "REVISE" | "ABORT",
-    "issues": ["issue1", "issue2"],  // empty if APPROVE
-    "revision_notes": "specific fixes needed",  // empty if APPROVE
+    "issues": ["issue1", "issue2"],
+    "revision_notes": "specific fixes needed",
     "quality_score": 0-100
 }
 
@@ -150,8 +153,7 @@ Rules:
 
 Be strict but fair. Only APPROVE when truly ready."""
 
-        messages = [
-            {"role": "user", "content": f"""## Original Task
+        user_message = f"""## Original Task
 {task}
 
 ## Strategy
@@ -160,16 +162,14 @@ Be strict but fair. Only APPROVE when truly ready."""
 ## Implementation
 {implementation}
 
-Review this implementation."""}
+Review this implementation and output JSON verdict."""
+
+        messages = [
+            {"role": "user", "content": user_message}
         ]
 
-        response = call_llm(
-            model_config=self.gpt_config,
-            messages=messages,
-            system_prompt=system_prompt,
-            session_id=self.session_id,
-            agent_role="dual_reviewer"
-        )
+        # Claude CLI 직접 호출 (Opus profile - reviewer)
+        response = call_claude_cli(messages, system_prompt, profile="reviewer")
 
         # Parse verdict
         try:
@@ -219,6 +219,17 @@ Review this implementation."""}
                         context=f"Previous revision notes: {revision_notes}"
                     )
                 print(f"[DualLoop] Strategy ({len(strategy)} chars)")
+
+                # DB 저장 + RAG 임베딩
+                add_message(
+                    session_id=self.session_id,
+                    role="assistant",
+                    content=strategy,
+                    agent="dual_strategist",
+                    project=self.project,
+                    is_internal=False  # CEO가 볼 수 있게
+                )
+
                 yield {"stage": "strategy_done", "iteration": i, "content": strategy}
             except Exception as e:
                 yield {"stage": "error", "iteration": i, "content": f"Strategy error: {str(e)}"}
@@ -230,21 +241,42 @@ Review this implementation."""}
             try:
                 implementation = self._call_claude_coder(strategy, task, revision_notes)
                 print(f"[DualLoop] Implementation ({len(implementation)} chars)")
+
+                # DB 저장 + RAG 임베딩
+                add_message(
+                    session_id=self.session_id,
+                    role="assistant",
+                    content=implementation,
+                    agent="dual_coder",
+                    project=self.project,
+                    is_internal=False
+                )
+
                 yield {"stage": "code_done", "iteration": i, "content": implementation}
             except Exception as e:
                 yield {"stage": "error", "iteration": i, "content": f"Implementation error: {str(e)}"}
                 return
 
-            # 3. Review (GPT-5.2)
-            yield {"stage": "review", "iteration": i, "content": f"GPT-5.2 Reviewer evaluating..."}
+            # 3. Review (Claude Opus)
+            yield {"stage": "review", "iteration": i, "content": f"Claude Opus Reviewer evaluating..."}
 
             try:
-                verdict, revision_notes = self._call_gpt_reviewer(task, strategy, implementation)
+                verdict, revision_notes = self._call_opus_reviewer(task, strategy, implementation)
                 print(f"[DualLoop] Review verdict: {verdict.value}")
 
                 review_content = f"Verdict: {verdict.value}"
                 if revision_notes:
                     review_content += f"\nRevision notes: {revision_notes}"
+
+                # DB 저장 + RAG 임베딩
+                add_message(
+                    session_id=self.session_id,
+                    role="assistant",
+                    content=review_content,
+                    agent="dual_reviewer",
+                    project=self.project,
+                    is_internal=False
+                )
 
                 yield {"stage": "review_done", "iteration": i, "content": review_content, "verdict": verdict.value}
             except Exception as e:
@@ -285,8 +317,8 @@ Review this implementation."""}
                 return
 
             # REVISE - continue to next iteration
-            context = f"Iteration {i} feedback: {revision_notes}"
-            print(f"[DualLoop] REVISE - continuing...")
+            # revision_notes는 다음 iteration에서 자동으로 사용됨 (220줄)
+            print(f"[DualLoop] REVISE - continuing to iteration {i+1}...")
 
         # Max iterations reached
         yield {

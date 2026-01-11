@@ -45,6 +45,14 @@ IMPLEMENTATION_BLOCKED
 
 반드시 아래 JSON 형식으로만 응답해라. 다른 텍스트 금지.
 
+```json
+{
+  "summary": "변경 사항 요약 (10자 이상, 동사+대상 포함)",
+  "diff": "unified diff 형식 (git apply 호환, 20자 이상)",
+  "files_changed": ["경로/파일명.py"],
+  "tests_needed": true
+}
+```
 
 
 ## 출력 규칙
@@ -63,6 +71,13 @@ IMPLEMENTATION_BLOCKED
 
 ## 불가능 시
 
+```json
+{
+  "error": "IMPLEMENTATION_BLOCKED",
+  "reason": "구체적인 차단 사유",
+  "missing": ["부족한 정보 목록"]
+}
+```
 
 
 ## 금지 (HARD BLOCK)

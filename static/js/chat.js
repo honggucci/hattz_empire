@@ -21,6 +21,9 @@ let projectFiles = [];
 let currentSessionId = localStorage.getItem('hattz_session_id') || null;
 let sessions = [];
 
+// Current mode (일반/논의/코딩)
+let currentMode = 'normal';  // default: 일반
+
 // AbortController for canceling requests
 let currentAbortController = null;
 let currentStreamId = null;  // 서버측 중단용
@@ -139,7 +142,8 @@ async function sendMessageViaJobsApi(message, originalMessage, agent) {
                 message: message,
                 agent: agent,
                 session_id: currentSessionId,
-                project: currentProject
+                project: currentProject,
+                mode: currentMode  // v2.6.4: 모드 전송
             })
         });
 
@@ -302,7 +306,12 @@ async function sendMessageViaSSE(message, agent) {
         const response = await fetch('/api/chat/stream', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ message, agent, session_id: currentSessionId }),
+            body: JSON.stringify({
+                message,
+                agent,
+                session_id: currentSessionId,
+                mode: currentMode  // v2.6.4: 모드 전송
+            }),
             signal: currentAbortController.signal
         });
 
@@ -1107,6 +1116,268 @@ async function loadCurrentSession() {
 
 // New Chat button handler
 newChatBtn.addEventListener('click', createNewSession);
+
+// =============================================================================
+// Session Continue Modal - 이전 세션에서 이어가기 (v2.6.9)
+// =============================================================================
+
+const continueSessionBtn = document.getElementById('continue-session-btn');
+const sessionContinueModal = document.getElementById('session-continue-modal');
+const closeContinueModal = document.getElementById('close-continue-modal');
+const cancelContinueBtn = document.getElementById('cancel-continue-btn');
+const confirmContinueBtn = document.getElementById('confirm-continue-btn');
+const sessionSelectList = document.getElementById('session-select-list');
+const sessionSearchInput = document.getElementById('session-search-input');
+const selectedSessionPreview = document.getElementById('selected-session-preview');
+
+let selectedParentSessionId = null;
+
+// 모달 열기
+function openContinueModal() {
+    if (sessionContinueModal) {
+        sessionContinueModal.classList.remove('hidden');
+        renderSessionSelectList();
+        selectedParentSessionId = null;
+        if (confirmContinueBtn) confirmContinueBtn.disabled = true;
+        if (selectedSessionPreview) {
+            selectedSessionPreview.innerHTML = '<div class="preview-placeholder">세션을 선택하면 미리보기가 표시됩니다</div>';
+        }
+    }
+}
+
+// 모달 닫기
+function closeContinueModalHandler() {
+    if (sessionContinueModal) {
+        sessionContinueModal.classList.add('hidden');
+        selectedParentSessionId = null;
+    }
+}
+
+// 세션 선택 목록 렌더링
+function renderSessionSelectList(filter = '') {
+    if (!sessionSelectList) return;
+
+    const filteredSessions = sessions.filter(session => {
+        const name = (session.name || 'New Chat').toLowerCase();
+        const project = (session.project || '').toLowerCase();
+        const searchTerm = filter.toLowerCase();
+        return name.includes(searchTerm) || project.includes(searchTerm);
+    });
+
+    if (filteredSessions.length === 0) {
+        sessionSelectList.innerHTML = '<div class="no-sessions-select">이어갈 수 있는 세션이 없습니다</div>';
+        return;
+    }
+
+    sessionSelectList.innerHTML = filteredSessions.map(session => {
+        const name = session.name || 'New Chat';
+        const date = new Date(session.updated_at).toLocaleDateString('ko-KR', {
+            month: 'short',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit'
+        });
+        const isSelected = session.id === selectedParentSessionId;
+
+        return `
+            <div class="session-select-item ${isSelected ? 'selected' : ''}"
+                 data-session-id="${session.id}"
+                 onclick="selectParentSession('${session.id}')">
+                <div class="session-select-icon">${isSelected ? '✓' : '💬'}</div>
+                <div class="session-select-info">
+                    <div class="session-select-name">${escapeHtml(name)}</div>
+                    <div class="session-select-meta">
+                        <span class="session-select-project">${session.project || '프로젝트 없음'}</span>
+                        <span class="session-select-date">${date}</span>
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+// 부모 세션 선택
+async function selectParentSession(sessionId) {
+    selectedParentSessionId = sessionId;
+    if (confirmContinueBtn) confirmContinueBtn.disabled = false;
+
+    // 선택 상태 업데이트
+    document.querySelectorAll('.session-select-item').forEach(item => {
+        item.classList.toggle('selected', item.dataset.sessionId === sessionId);
+        const icon = item.querySelector('.session-select-icon');
+        if (icon) {
+            icon.textContent = item.dataset.sessionId === sessionId ? '✓' : '💬';
+        }
+    });
+
+    // 미리보기 로드
+    if (selectedSessionPreview) {
+        selectedSessionPreview.innerHTML = '<div class="preview-loading">미리보기 로드 중...</div>';
+
+        try {
+            // 세션 메시지 가져오기
+            const response = await fetch(`/api/sessions/${sessionId}/messages`);
+            const messages = await response.json();
+
+            const session = sessions.find(s => s.id === sessionId);
+            const sessionName = session?.name || 'New Chat';
+            const messageCount = messages.length;
+
+            // 최근 3개 메시지 미리보기
+            const recentMessages = messages.slice(-6).map(msg => {
+                const role = msg.role === 'user' ? '👤' : '🤖';
+                const content = (msg.content || '').slice(0, 100);
+                return `<div class="preview-message ${msg.role}">
+                    <span class="preview-role">${role}</span>
+                    <span class="preview-content">${escapeHtml(content)}${msg.content?.length > 100 ? '...' : ''}</span>
+                </div>`;
+            }).join('');
+
+            selectedSessionPreview.innerHTML = `
+                <div class="preview-header">
+                    <strong>${escapeHtml(sessionName)}</strong>
+                    <span class="preview-count">${messageCount}개 메시지</span>
+                </div>
+                <div class="preview-messages">
+                    ${recentMessages || '<div class="preview-empty">메시지 없음</div>'}
+                </div>
+                <div class="preview-footer">
+                    <small>💡 이 세션의 요약과 최근 대화가 새 세션에 주입됩니다</small>
+                </div>
+            `;
+        } catch (error) {
+            selectedSessionPreview.innerHTML = '<div class="preview-error">미리보기를 불러올 수 없습니다</div>';
+        }
+    }
+}
+
+// 이전 세션에서 이어가기로 새 세션 생성
+async function createSessionFromParent() {
+    if (!selectedParentSessionId) {
+        alert('이어갈 세션을 선택해주세요');
+        return;
+    }
+
+    // 프로젝트 선택 확인
+    if (!currentProject) {
+        alert('프로젝트를 먼저 선택해주세요');
+        closeContinueModalHandler();
+        showProjectRequiredModal();
+        return;
+    }
+
+    try {
+        if (confirmContinueBtn) {
+            confirmContinueBtn.disabled = true;
+            confirmContinueBtn.textContent = '생성 중...';
+        }
+
+        const response = await fetch('/api/sessions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                agent: currentAgent,
+                project: currentProject,
+                parent_session_id: selectedParentSessionId
+            })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+            throw new Error(data.error || 'Failed to create session');
+        }
+
+        currentSessionId = data.session_id;
+        localStorage.setItem('hattz_session_id', data.session_id);
+
+        // 모달 닫기
+        closeContinueModalHandler();
+
+        // 채팅 영역 초기화 및 컨텍스트 표시
+        chatMessages.innerHTML = '';
+
+        // 이전 세션 컨텍스트가 있으면 시스템 메시지로 표시
+        if (data.parent_context) {
+            const contextDiv = document.createElement('div');
+            contextDiv.className = 'message system context-message';
+            contextDiv.innerHTML = `
+                <div class="message-header">
+                    <span class="agent-badge system">📚 이전 세션 컨텍스트</span>
+                </div>
+                <div class="message-content">
+                    <details>
+                        <summary>이전 세션 요약 펼치기</summary>
+                        <div class="context-content">${formatContent(data.parent_context)}</div>
+                    </details>
+                </div>
+            `;
+            chatMessages.appendChild(contextDiv);
+        }
+
+        // 환영 메시지 표시
+        const welcomeDiv = document.createElement('div');
+        welcomeDiv.className = 'welcome-message continue-welcome';
+        welcomeDiv.innerHTML = `
+            <h2>🔗 이전 세션에서 이어가기</h2>
+            <p>이전 세션의 컨텍스트가 로드되었습니다. 대화를 이어가세요!</p>
+        `;
+        chatMessages.appendChild(welcomeDiv);
+
+        // 세션 목록 새로고침
+        await loadSessions();
+
+        console.log('[Session] Created with parent:', selectedParentSessionId);
+
+    } catch (error) {
+        console.error('Failed to create session from parent:', error);
+        alert(`세션 생성 실패: ${error.message}`);
+    } finally {
+        if (confirmContinueBtn) {
+            confirmContinueBtn.disabled = false;
+            confirmContinueBtn.textContent = '새 세션 시작';
+        }
+    }
+}
+
+// 이벤트 리스너 등록
+if (continueSessionBtn) {
+    continueSessionBtn.addEventListener('click', openContinueModal);
+}
+
+if (closeContinueModal) {
+    closeContinueModal.addEventListener('click', closeContinueModalHandler);
+}
+
+if (cancelContinueBtn) {
+    cancelContinueBtn.addEventListener('click', closeContinueModalHandler);
+}
+
+if (confirmContinueBtn) {
+    confirmContinueBtn.addEventListener('click', createSessionFromParent);
+}
+
+if (sessionSearchInput) {
+    sessionSearchInput.addEventListener('input', (e) => {
+        renderSessionSelectList(e.target.value);
+    });
+}
+
+// 모달 외부 클릭 시 닫기
+if (sessionContinueModal) {
+    sessionContinueModal.addEventListener('click', (e) => {
+        if (e.target === sessionContinueModal) {
+            closeContinueModalHandler();
+        }
+    });
+}
+
+// ESC 키로 모달 닫기
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && sessionContinueModal && !sessionContinueModal.classList.contains('hidden')) {
+        closeContinueModalHandler();
+    }
+});
 
 // Initialize
 loadProjects();
@@ -2231,4 +2502,76 @@ document.addEventListener('visibilitychange', () => {
         // 탭이 다시 활성화되면 재연결
         reconnectProgressSSE();
     }
+});
+
+// =============================================================================
+// Mode Selector - 일반/논의/코딩 모드 전환 (v2.6.4)
+// =============================================================================
+
+// 모드 버튼 이벤트 리스너 등록
+function initializeModeButtons() {
+    const modeButtons = document.querySelectorAll('.mode-btn');
+
+    modeButtons.forEach(btn => {
+        btn.addEventListener('click', function() {
+            // 모든 버튼에서 active 클래스 제거
+            modeButtons.forEach(b => b.classList.remove('active'));
+
+            // 클릭한 버튼에 active 클래스 추가
+            this.classList.add('active');
+
+            // 현재 모드 업데이트
+            currentMode = this.dataset.mode;
+
+            console.log('[Mode] Switched to:', currentMode);
+
+            // 모드 변경 피드백 (선택사항)
+            showModeChangeNotification(currentMode);
+        });
+    });
+}
+
+// 모드 변경 알림 표시 (선택사항)
+function showModeChangeNotification(mode) {
+    const modeLabels = {
+        'normal': '💬 일반 모드',
+        'discuss': '🧠 논의 모드',
+        'code': '💻 코딩 모드'
+    };
+
+    const label = modeLabels[mode] || mode;
+
+    // 임시 알림 배너 표시
+    const notification = document.createElement('div');
+    notification.className = 'mode-change-notification';
+    notification.textContent = `${label}로 전환되었습니다`;
+    notification.style.cssText = `
+        position: fixed;
+        top: 80px;
+        right: 20px;
+        background: rgba(37, 99, 235, 0.9);
+        color: white;
+        padding: 12px 20px;
+        border-radius: 8px;
+        font-size: 14px;
+        font-weight: 500;
+        z-index: 10000;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        animation: slideInRight 0.3s ease-out;
+    `;
+
+    document.body.appendChild(notification);
+
+    // 2초 후 자동 제거
+    setTimeout(() => {
+        notification.style.opacity = '0';
+        notification.style.transform = 'translateX(20px)';
+        notification.style.transition = 'all 0.3s ease-out';
+        setTimeout(() => notification.remove(), 300);
+    }, 2000);
+}
+
+// 페이지 로드 시 모드 버튼 초기화
+document.addEventListener('DOMContentLoaded', () => {
+    initializeModeButtons();
 });

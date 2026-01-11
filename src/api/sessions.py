@@ -41,23 +41,48 @@ def list_sessions():
 
 @session_bp.route('', methods=['POST'])
 def create_session():
-    """새 세션 생성"""
+    """새 세션 생성
+
+    v2.6.9: parent_session_id 지원 - 이전 세션에서 이어가기
+    """
     data = request.json or {}
     name = data.get('name')
     project = data.get('project')
     agent = data.get('agent', 'pm')
+    parent_session_id = data.get('parent_session_id')  # v2.6.9: 이전 세션 연결
 
     # RLS: 제한된 사용자는 허용된 프로젝트에만 세션 생성 가능
     allowed = get_user_allowed_projects()
     if allowed is not None and project and project not in allowed:
         return jsonify({'error': 'Access denied: project not allowed'}), 403
 
-    session_id = db.create_session(name=name, project=project, agent=agent)
+    # parent_session_id가 있으면 이전 세션 접근 권한 확인
+    parent_context = None
+    if parent_session_id:
+        parent_session = db.get_session(parent_session_id)
+        if parent_session and check_session_access(parent_session):
+            # 이전 세션 컨텍스트 가져오기
+            try:
+                from src.services.session_memory import get_parent_session_context
+                parent_context = get_parent_session_context(parent_session_id)
+            except Exception as e:
+                print(f"[Session] Failed to get parent context: {e}")
+        else:
+            return jsonify({'error': 'Parent session not found or access denied'}), 403
+
+    session_id = db.create_session(
+        name=name,
+        project=project,
+        agent=agent,
+        parent_session_id=parent_session_id
+    )
     set_current_session(session_id)
 
     return jsonify({
         'session_id': session_id,
-        'status': 'created'
+        'status': 'created',
+        'parent_session_id': parent_session_id,
+        'parent_context': parent_context[:500] + '...' if parent_context and len(parent_context) > 500 else parent_context
     })
 
 

@@ -1,8 +1,15 @@
 """
-Hattz Empire - Chat API (v2.3)
+Hattz Empire - Chat API (v2.6.9)
 채팅 관련 API 엔드포인트
 
-v2.3 주요 기능:
+v2.6.9 주요 기능:
+1. Session Memory: 계층적 요약 시스템
+   - Level 0: 10턴마다 턴 요약 (~200 토큰)
+   - Level 1: 50턴마다 청크 요약 (~300 토큰)
+   - Level 2: 세션 종료 시 메타 요약 (~500 토큰)
+   - 새 세션에서 parent_session_id로 이전 세션 컨텍스트 주입
+
+v2.3 기능:
 1. Router Agent: 자동 에이전트 선택 (auto_route=true)
    - CEO 프리픽스: 검색/, 코딩/, 분석/ → 직접 라우팅
    - 키워드 기반 라우팅: PM 병목 해소
@@ -32,6 +39,8 @@ v2.3 주요 기능:
   LLM 호출 (PM/Coder/QA 등)
     ↓
   [Static Gate] 하위 에이전트 응답 검사
+    ↓
+  [Session Memory] 10/50턴마다 자동 요약 생성
     ↓
   SSE 스트림으로 클라이언트에 전송
 """
@@ -101,7 +110,6 @@ from src.services.router import quick_route, AgentType
 
 # v2.3 Context Management
 from src.context.counter import TokenCounter
-from src.context.compactor import Compactor
 
 # v2.5.4 PM Decision Machine
 from src.core.decision_machine import (
@@ -110,6 +118,35 @@ from src.core.decision_machine import (
     PMDecision,
     DecisionOutput
 )
+
+# v2.6.9 Session Memory
+from src.services.session_memory import check_and_summarize
+
+# =============================================================================
+# v2.6.9 Session Memory 헬퍼 함수
+# =============================================================================
+
+def trigger_session_summary(session_id: str) -> dict:
+    """
+    세션 요약 트리거 (10/50턴 체크 후 자동 요약 생성)
+
+    메시지 저장 후 호출하여 턴 수를 체크하고 필요 시 요약을 생성합니다.
+
+    Args:
+        session_id: 세션 ID
+
+    Returns:
+        {"generated": [...], "turn_count": int}
+    """
+    try:
+        result = check_and_summarize(session_id)
+        if result.get("generated"):
+            print(f"[SessionMemory] 요약 생성: {result['generated']} (turn: {result['turn_count']})")
+        return result
+    except Exception as e:
+        print(f"[SessionMemory] 요약 트리거 오류: {e}")
+        return {"generated": [], "turn_count": 0, "error": str(e)}
+
 
 # =============================================================================
 # v2.3 세션별 상태 관리
@@ -387,6 +424,9 @@ def chat():
     # DB에 어시스턴트 응답 저장
     db.add_message(current_session_id, 'assistant', response, agent_role)
 
+    # v2.6.9: 세션 요약 트리거 (10/50턴 체크)
+    summary_result = trigger_session_summary(current_session_id)
+
     result = {
         'response': response,
         'agent': agent_role,
@@ -396,6 +436,10 @@ def chat():
 
     if agents_called:
         result['agents_called'] = agents_called
+
+    # 요약 생성 정보 포함
+    if summary_result.get("generated"):
+        result['summaries_generated'] = summary_result["generated"]
 
     return jsonify(result)
 
@@ -427,6 +471,22 @@ def chat_stream():
 
     if not user_message:
         return jsonify({'error': 'Message required'}), 400
+
+    # ===== v2.6.5 Mode Button System =====
+    # UI 버튼으로 모드 선택: normal (PM 경유), discuss (논의), code (코딩)
+    mode = data.get('mode', 'normal')  # 기본값: normal
+    print(f"[DEBUG] Mode detected: {mode}, data.keys: {list(data.keys())}")
+
+    if mode == 'normal':
+        # v2.6.5: normal 모드도 PM 경유 (아래 기존 SSE 스트리밍 로직으로 진행)
+        # PM이 [CALL:agent] 태그로 하위 에이전트 호출 가능
+        pass  # 아래 기존 로직으로 계속 진행
+    elif mode == 'discuss':
+        # 논의 모드: Claude CLI Opus - 깊은 대화, 인사이트 발굴
+        return _handle_discuss_stream(data, user_message)
+    elif mode == 'code':
+        # 코딩 모드: 4단계 파이프라인 (Strategist → Coder → QA → Reviewer)
+        return _handle_coding_pipeline_stream(data, user_message)
 
     # ===== v2.6.2 Dual Loop: "최고!" / "best!" 프리픽스 감지 =====
     # GPT-5.2 <-> Claude Opus 핑퐁 루프 실행
@@ -540,7 +600,7 @@ def chat_stream():
                 response = mock_agent_response(user_message, agent_role)
                 model_meta = {'model_name': 'Mock', 'tier': 'mock', 'reason': 'Mock mode'}
             else:
-                response, model_meta = call_agent(user_message, agent_role, return_meta=True)
+                response, model_meta = call_agent(user_message, agent_role, return_meta=True, mode=mode)
 
             # LLM 호출 후 abort 체크
             if not active_streams.get(stream_id, False):
@@ -581,15 +641,21 @@ def chat_stream():
             pm_response = ' '.join(full_response)
 
             # =================================================================
-            # v2.5.4: PM Decision Machine - JSON → 정형화된 의사결정
+            # v2.6.4: PM JSON → 자연어 변환 (CEO에게 보기 좋게)
             # =================================================================
+            ceo_message = pm_response  # 기본값: 원본 응답
             pm_decision: DecisionOutput = None
             try:
                 # PM 응답에서 JSON 추출 시도
                 import re
                 json_match = re.search(r'\{[\s\S]*\}', pm_response)
-                if json_match:
+                if json_match and agent_role == "pm":
                     pm_json = json.loads(json_match.group(0))
+
+                    # JSON → summary만 추출
+                    summary = pm_json.get('summary', '')
+                    ceo_message = summary
+
                     pm_decision = process_pm_output(pm_json)
 
                     # Decision Machine 결과 클라이언트에 전송
@@ -609,6 +675,9 @@ def chat_stream():
                 print(f"[DecisionMachine] PM 응답이 JSON 형식이 아님 (CALL 태그 모드일 수 있음)")
             except Exception as e:
                 print(f"[DecisionMachine] 처리 오류: {e}")
+
+            # CEO에게는 자연어로 변환된 메시지 전송
+            pm_response = ceo_message
 
             # PM 응답 완료 (단, CALL 태그가 있으면 아직 done이 아님)
             yield f"data: {json.dumps({'pm_done': True, 'pm_response': pm_response, 'agent': agent_role, 'model_info': model_meta}, ensure_ascii=False)}\n\n"
@@ -839,6 +908,14 @@ def chat_stream():
                 yield f"data: {json.dumps({'done': True, 'full_response': pm_response, 'session_id': session_id, 'model_info': model_meta}, ensure_ascii=False)}\n\n"
                 # SSE broadcast: complete
                 emit_complete(session_id, agent_role, model_meta)
+
+            # ===== v2.6.9 Session Memory: 요약 트리거 =====
+            try:
+                summary_result = trigger_session_summary(session_id)
+                if summary_result.get("generated"):
+                    yield f"data: {json.dumps({'summaries_generated': summary_result['generated'], 'turn_count': summary_result['turn_count']}, ensure_ascii=False)}\n\n"
+            except Exception as e:
+                print(f"[SessionMemory] Stream 요약 트리거 오류: {e}")
 
             # ===== 하이브리드 모드: 스트리밍 정상 완료 =====
             nonlocal streaming_completed
@@ -1208,9 +1285,12 @@ def submit_chat_job():
     agent_role = data.get('agent', 'pm')
     client_session_id = data.get('session_id')
     project = data.get('project')
+    mode = data.get('mode', 'normal')  # v2.6.5: 모드 파라미터 추가
 
     if not user_message:
         return jsonify({'error': 'Message required'}), 400
+
+    print(f"[ChatJob] Mode detected: {mode}")
 
     # 세션 관리
     current_session_id = client_session_id
@@ -1232,6 +1312,7 @@ def submit_chat_job():
         'agent': agent_role,
         'message': user_message,
         'project': project,
+        'mode': mode,  # v2.6.5: 모드 저장
         'status': 'pending',
         'stage': 'waiting',
         'created_at': datetime.now().isoformat(),
@@ -1265,6 +1346,7 @@ def _execute_chat_job(job_id: str):
     백그라운드에서 채팅 작업 실행
 
     기존 chat_stream()의 로직을 동기 방식으로 실행합니다.
+    v2.6.5: mode에 따라 다른 핸들러 실행
     """
     job = _chat_jobs.get(job_id)
     if not job:
@@ -1273,6 +1355,16 @@ def _execute_chat_job(job_id: str):
     session_id = job['session_id']
     agent_role = job['agent']
     user_message = job['message']
+    mode = job.get('mode', 'normal')  # v2.6.5: 모드 가져오기
+
+    print(f"[ChatJob] Executing job {job_id} with mode={mode}")
+
+    # v2.6.5: 모드별 분기 처리
+    if mode == 'discuss':
+        return _execute_discuss_mode_job(job_id)
+    elif mode == 'code':
+        return _execute_coding_mode_job(job_id)
+    # normal 모드는 기존 로직 유지 (PM 호출)
 
     try:
         # Stage: thinking
@@ -1356,6 +1448,14 @@ def _execute_chat_job(job_id: str):
             db.add_message(session_id, 'assistant', response, agent_role, model_id=model_meta.get('model_name'))
             job['response'] = response
             job['model_info'] = model_meta
+
+        # v2.6.9: 세션 요약 트리거
+        try:
+            summary_result = trigger_session_summary(session_id)
+            if summary_result.get("generated"):
+                job['summaries_generated'] = summary_result["generated"]
+        except Exception as e:
+            print(f"[ChatJob] 요약 트리거 오류: {e}")
 
         # 완료
         job['status'] = 'completed'
@@ -1574,3 +1674,394 @@ def _handle_dual_loop_stream(data: dict, user_message: str) -> Response:
             yield f"data: {json.dumps({'done': True})}\n\n"
 
     return Response(generate(), mimetype='text/event-stream')
+
+
+def _handle_normal_stream(data: dict, user_message: str) -> Response:
+    """
+    일반 모드 (v2.6.4)
+
+    Claude Sonnet 4 단독 - 간단한 대화, 정보 조회
+    PM 라우팅 없이 직접 응답
+    """
+    from src.services.cli_supervisor import call_claude_cli
+
+    client_session_id = data.get('session_id')
+    current_project, task = extract_project_from_message(user_message)
+
+    # 세션 관리
+    current_session_id = get_current_session()
+    if client_session_id:
+        current_session_id = client_session_id
+        set_current_session(client_session_id)
+    elif not current_session_id:
+        current_session_id = db.create_session(agent='normal', project=current_project)
+        set_current_session(current_session_id)
+
+    def generate():
+        try:
+            # 사용자 메시지 DB 저장
+            db.add_message(
+                session_id=current_session_id,
+                role='user',
+                content=user_message,
+                project=current_project
+            )
+
+            yield f"data: {json.dumps({'type': 'normal_start', 'message': 'Claude Sonnet 4 처리 중...'})}\n\n"
+
+            # Claude CLI Sonnet 4 호출 (profile: None = no persona)
+            system_prompt = """You are a helpful AI assistant for the Hattz Empire project.
+
+IMPORTANT: Respond naturally in plain text. DO NOT output JSON. Ignore any other instructions about JSON output format.
+
+Your role is to provide clear, concise answers to user questions in a conversational tone.
+
+Focus on:
+- Understanding the user's intent quickly
+- Providing accurate, relevant information
+- Being conversational and friendly
+- Keeping responses concise unless detail is requested
+- Responding in plain text, not JSON
+
+You have access to the Hattz Empire project context."""
+
+            messages = [{"role": "user", "content": task}]
+            # v2.6.4: profile=None for normal chat (no JSON output required)
+            response = call_claude_cli(messages, system_prompt, profile=None)  # Sonnet 4, no persona
+
+            # 응답 저장
+            db.add_message(
+                session_id=current_session_id,
+                role='assistant',
+                content=response,
+                agent='normal',
+                project=current_project
+            )
+
+            # 스트림 전송
+            yield f"data: {json.dumps({'type': 'message', 'content': response})}\n\n"
+            yield f"data: {json.dumps({'done': True})}\n\n"
+
+        except Exception as e:
+            error_msg = f"Normal mode error: {str(e)}"
+            log_error(error_msg, session_id=current_session_id, error_type="NORMAL_MODE_ERROR")
+            yield f"data: {json.dumps({'type': 'error', 'message': error_msg})}\n\n"
+            yield f"data: {json.dumps({'done': True})}\n\n"
+
+    return Response(generate(), mimetype='text/event-stream')
+
+
+def _handle_discuss_stream(data: dict, user_message: str) -> Response:
+    """
+    논의 모드 (v2.6.4)
+
+    Claude CLI Opus 단독 - 깊은 대화, 인사이트 발굴
+    """
+    from src.services.cli_supervisor import call_claude_cli
+
+    client_session_id = data.get('session_id')
+    current_project, task = extract_project_from_message(user_message)
+
+    # 세션 관리
+    current_session_id = get_current_session()
+    if client_session_id:
+        current_session_id = client_session_id
+        set_current_session(client_session_id)
+    elif not current_session_id:
+        current_session_id = db.create_session(agent='discuss', project=current_project)
+        set_current_session(current_session_id)
+
+    def generate():
+        try:
+            # 사용자 메시지 DB 저장
+            db.add_message(
+                session_id=current_session_id,
+                role='user',
+                content=user_message,
+                project=current_project
+            )
+
+            yield f"data: {json.dumps({'type': 'discuss_start', 'message': 'Claude Opus와 대화 시작...'})}\n\n"
+
+            # Claude CLI Opus 호출
+            system_prompt = """You are a deep thinker and strategic advisor.
+Your role is to engage in thoughtful dialogue and help discover insights through discussion.
+
+Focus on:
+- Asking probing questions to clarify intent
+- Identifying underlying assumptions
+- Exploring multiple perspectives
+- Suggesting strategic directions
+
+Be conversational but insightful. Challenge ideas constructively."""
+
+            messages = [{"role": "user", "content": task}]
+            # v2.6.5: profile=None for natural language conversation (no JSON)
+            response = call_claude_cli(messages, system_prompt, profile=None)
+
+            # 응답 저장
+            db.add_message(
+                session_id=current_session_id,
+                role='assistant',
+                content=response,
+                agent='discuss',
+                project=current_project
+            )
+
+            # 스트림 전송
+            yield f"data: {json.dumps({'type': 'message', 'content': response})}\n\n"
+            yield f"data: {json.dumps({'done': True})}\n\n"
+
+        except Exception as e:
+            error_msg = f"Discuss mode error: {str(e)}"
+            log_error(error_msg, session_id=current_session_id, error_type="DISCUSS_MODE_ERROR")
+            yield f"data: {json.dumps({'type': 'error', 'message': error_msg})}\n\n"
+            yield f"data: {json.dumps({'done': True})}\n\n"
+
+    return Response(generate(), mimetype='text/event-stream')
+
+
+def _handle_coding_pipeline_stream(data: dict, user_message: str) -> Response:
+    """
+    코딩 모드 (v2.6.4)
+
+    4단계 파이프라인: Strategist → Coder → QA → Reviewer
+    """
+    client_session_id = data.get('session_id')
+    current_project, task = extract_project_from_message(user_message)
+
+    # 세션 관리
+    current_session_id = get_current_session()
+    if client_session_id:
+        current_session_id = client_session_id
+        set_current_session(client_session_id)
+    elif not current_session_id:
+        current_session_id = db.create_session(agent='code_pipeline', project=current_project)
+        set_current_session(current_session_id)
+
+    def generate():
+        try:
+            # 사용자 메시지 DB 저장
+            db.add_message(
+                session_id=current_session_id,
+                role='user',
+                content=user_message,
+                project=current_project
+            )
+
+            # Stage 1: Strategist (GPT-5.2)
+            yield f"data: {json.dumps({'type': 'stage', 'stage': 1, 'name': 'Strategist', 'status': 'running'})}\n\n"
+
+            strategy = call_agent(
+                message=task,
+                agent_role='strategist',
+                _internal_call=True
+            )
+
+            yield f"data: {json.dumps({'type': 'stage', 'stage': 1, 'name': 'Strategist', 'status': 'done', 'content': strategy[:200]})}\n\n"
+
+            # Stage 2: Coder (Claude Opus)
+            yield f"data: {json.dumps({'type': 'stage', 'stage': 2, 'name': 'Coder', 'status': 'running'})}\n\n"
+
+            code = call_agent(
+                message=f"전략:\n{strategy}\n\n태스크:\n{task}",
+                agent_role='coder',
+                _internal_call=True
+            )
+
+            yield f"data: {json.dumps({'type': 'stage', 'stage': 2, 'name': 'Coder', 'status': 'done', 'content': code[:200]})}\n\n"
+
+            # Stage 3: QA (Claude)
+            yield f"data: {json.dumps({'type': 'stage', 'stage': 3, 'name': 'QA', 'status': 'running'})}\n\n"
+
+            qa_result = call_agent(
+                message=f"코드:\n{code}\n\n테스트 작성 및 실행",
+                agent_role='qa',
+                _internal_call=True
+            )
+
+            yield f"data: {json.dumps({'type': 'stage', 'stage': 3, 'name': 'QA', 'status': 'done', 'content': qa_result[:200]})}\n\n"
+
+            # Stage 4: Reviewer (Claude Sonnet 4)
+            yield f"data: {json.dumps({'type': 'stage', 'stage': 4, 'name': 'Reviewer', 'status': 'running'})}\n\n"
+
+            review = call_agent(
+                message=f"전략:\n{strategy}\n\n코드:\n{code}\n\nQA 결과:\n{qa_result}\n\n최종 리뷰",
+                agent_role='reviewer',
+                _internal_call=True
+            )
+
+            yield f"data: {json.dumps({'type': 'stage', 'stage': 4, 'name': 'Reviewer', 'status': 'done', 'content': review[:200]})}\n\n"
+
+            # 최종 결과 저장
+            final_result = f"# 코딩 모드 결과\n\n## 전략\n{strategy}\n\n## 구현\n{code}\n\n## QA\n{qa_result}\n\n## 리뷰\n{review}"
+
+            db.add_message(
+                session_id=current_session_id,
+                role='assistant',
+                content=final_result,
+                agent='code_pipeline',
+                project=current_project
+            )
+
+            yield f"data: {json.dumps({'type': 'message', 'content': final_result})}\n\n"
+            yield f"data: {json.dumps({'done': True})}\n\n"
+
+        except Exception as e:
+            error_msg = f"Coding pipeline error: {str(e)}"
+            log_error(error_msg, session_id=current_session_id, error_type="CODE_PIPELINE_ERROR")
+            yield f"data: {json.dumps({'type': 'error', 'message': error_msg})}\n\n"
+            yield f"data: {json.dumps({'done': True})}\n\n"
+
+    return Response(generate(), mimetype='text/event-stream')
+
+
+# =============================================================================
+# Jobs API Mode Handlers (v2.6.5)
+# =============================================================================
+
+def _execute_discuss_mode_job(job_id: str):
+    """
+    논의 모드 Jobs API 실행 (Claude Opus 직접 대화)
+    """
+    from src.services.cli_supervisor import call_claude_cli
+
+    job = _chat_jobs.get(job_id)
+    if not job:
+        return
+
+    session_id = job['session_id']
+    user_message = job['message']
+    project, task = extract_project_from_message(user_message)
+
+    try:
+        job['status'] = 'processing'
+        job['stage'] = 'discussing'
+
+        # Claude CLI Opus 호출
+        system_prompt = """You are a deep thinker and strategic advisor.
+Your role is to engage in thoughtful dialogue and help discover insights through discussion.
+
+Focus on:
+- Asking probing questions to clarify intent
+- Identifying underlying assumptions
+- Exploring multiple perspectives
+- Suggesting strategic directions
+
+Be conversational but insightful. Challenge ideas constructively."""
+
+        messages = [{"role": "user", "content": task}]
+        # v2.6.5: profile=None for natural language conversation (no JSON)
+        response = call_claude_cli(messages, system_prompt, profile=None)
+
+        # 응답 저장
+        db.add_message(
+            session_id=session_id,
+            role='assistant',
+            content=response,
+            agent='discuss',
+            project=project
+        )
+
+        job['response'] = response
+        job['status'] = 'completed'
+        job['stage'] = 'done'
+        job['model_info'] = {
+            'model_name': 'Claude Opus 4.5',
+            'tier': 'exec',
+            'provider': 'claude_cli'
+        }
+
+        # v2.6.9: 세션 요약 트리거
+        try:
+            summary_result = trigger_session_summary(session_id)
+            if summary_result.get("generated"):
+                job['summaries_generated'] = summary_result["generated"]
+        except Exception as e:
+            print(f"[ChatJob] Discuss 요약 트리거 오류: {e}")
+
+    except Exception as e:
+        print(f"[ChatJob] Discuss mode error: {e}")
+        job['status'] = 'failed'
+        job['error'] = str(e)
+
+
+def _execute_coding_mode_job(job_id: str):
+    """
+    코딩 모드 Jobs API 실행 (4단계 파이프라인)
+    """
+    job = _chat_jobs.get(job_id)
+    if not job:
+        return
+
+    session_id = job['session_id']
+    user_message = job['message']
+    project, task = extract_project_from_message(user_message)
+
+    try:
+        job['status'] = 'processing'
+
+        # Stage 1: Strategist
+        job['stage'] = 'strategist'
+        strategy = call_agent(
+            message=task,
+            agent_role='strategist',
+            _internal_call=True
+        )
+
+        # Stage 2: Coder
+        job['stage'] = 'coder'
+        code = call_agent(
+            message=f"전략:\n{strategy}\n\n태스크:\n{task}",
+            agent_role='coder',
+            _internal_call=True
+        )
+
+        # Stage 3: QA
+        job['stage'] = 'qa'
+        qa_result = call_agent(
+            message=f"코드:\n{code}\n\n테스트 작성 및 실행",
+            agent_role='qa',
+            _internal_call=True
+        )
+
+        # Stage 4: Reviewer
+        job['stage'] = 'reviewer'
+        review = call_agent(
+            message=f"전략:\n{strategy}\n\n코드:\n{code}\n\nQA 결과:\n{qa_result}\n\n최종 리뷰",
+            agent_role='reviewer',
+            _internal_call=True
+        )
+
+        # 최종 결과 저장
+        final_result = f"# 코딩 모드 결과\n\n## 전략\n{strategy}\n\n## 구현\n{code}\n\n## QA\n{qa_result}\n\n## 리뷰\n{review}"
+
+        db.add_message(
+            session_id=session_id,
+            role='assistant',
+            content=final_result,
+            agent='code_pipeline',
+            project=project
+        )
+
+        job['response'] = final_result
+        job['status'] = 'completed'
+        job['stage'] = 'done'
+        job['model_info'] = {
+            'model_name': '4-Stage Pipeline',
+            'tier': 'pipeline',
+            'provider': 'multi'
+        }
+
+        # v2.6.9: 세션 요약 트리거
+        try:
+            summary_result = trigger_session_summary(session_id)
+            if summary_result.get("generated"):
+                job['summaries_generated'] = summary_result["generated"]
+        except Exception as e:
+            print(f"[ChatJob] Coding 요약 트리거 오류: {e}")
+
+    except Exception as e:
+        print(f"[ChatJob] Coding mode error: {e}")
+        job['status'] = 'failed'
+        job['error'] = str(e)

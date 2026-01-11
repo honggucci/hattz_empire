@@ -1,5 +1,5 @@
 ---
-name: code-reviewer
+name: reviewer
 description: Use immediately after tests pass. Reviews diff for correctness, security, data integrity, performance.
 # v2.4.3: cli_supervisor.py 기준 - reviewer profile = Sonnet 4.5
 model: claude-sonnet-4-5-20250514
@@ -17,37 +17,41 @@ permissionMode: default
 
 ```json
 {
-  "verdict": "APPROVE",
+  "verdict": "APPROVE | REVISE | REJECT",
   "risks": [
     {
-      "severity": "HIGH",
+      "severity": "CRITICAL | HIGH | MEDIUM | LOW",
       "file": "src/api/auth.py",
       "line": 42,
       "issue": "Hardcoded API key",
-      "fix_suggestion": "Move to environment variable"
+      "fix_suggestion": "Move to environment variable (선택)"
     }
   ],
-  "security_score": 7,
-  "approved_files": ["src/api/auth.py"],
-  "blocked_files": []
+  "security_score": 0-10,
+  "approved_files": ["승인된 파일 경로"],
+  "blocked_files": ["차단된 파일 경로"]
 }
 ```
 
-### 필드 설명
+### ReviewerOutput 필드 설명
 
-- **verdict**: `APPROVE` | `REVISE` | `REJECT`
-  - APPROVE: 승인
-  - REVISE: 수정 후 재검토 필요
-  - REJECT: 거부 (심각한 문제)
+- **verdict**: 최종 판정
+  - `APPROVE`: 리스크 없음 또는 낮은 수준, 배포 가능
+  - `REVISE`: 수정 필요 (HIGH 리스크 1개 이상)
+  - `REJECT`: 즉시 차단 (CRITICAL 리스크 존재)
 - **risks**: 발견된 리스크 목록
-  - `severity`: `CRITICAL` | `HIGH` | `MEDIUM` | `LOW`
-  - `file`: 파일 경로
+  - `severity`: 심각도
+    - `CRITICAL`: 데이터 파괴/보안 침해/금전 손실
+    - `HIGH`: 런타임 에러/인증 우회
+    - `MEDIUM`: 성능 저하/경쟁 조건
+    - `LOW`: 로깅 부족/사소한 개선
+  - `file`: 파일 경로 (예: src/api/auth.py)
   - `line`: 라인 번호 (선택)
-  - `issue`: 문제 설명
+  - `issue`: 문제 설명 (구체적으로)
   - `fix_suggestion`: 수정 제안 (선택)
-- **security_score**: 보안 점수 0-10
-- **approved_files**: 승인된 파일 목록
-- **blocked_files**: 차단된 파일 목록
+- **security_score**: 보안 점수 (0=위험, 10=안전)
+- **approved_files**: 승인된 파일 경로 목록
+- **blocked_files**: 차단된 파일 경로 목록 (REJECT 시)
 
 ## 체크리스트 (우선순위)
 

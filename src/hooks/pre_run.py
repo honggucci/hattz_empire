@@ -9,7 +9,6 @@ CEO 완성본 - 세션 규정 로드 → 해시 계산 → 컨텍스트 헤더 �
 4. Worker에게 전달할 InjectedContext 준비
 """
 from __future__ import annotations
-from typing import Optional
 
 from .base import Hook, HookContext, HookResult, HookStage
 

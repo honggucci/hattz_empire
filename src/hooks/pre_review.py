@@ -8,7 +8,7 @@ CEO 완성본 - StaticChecker 우선 실행 → 위반 시 LLM 없이 REJECT
 3. 위반 없으면 LLM Reviewer로 진행 허용
 """
 from __future__ import annotations
-from typing import Optional, List
+from typing import List
 
 from .base import Hook, HookContext, HookResult, HookStage
 

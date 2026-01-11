@@ -25,7 +25,8 @@ analytics_bp = Blueprint('analytics', __name__, url_prefix='/api/analytics')
 
 def register_blueprints(app):
     """모든 Blueprint를 앱에 등록"""
-    from . import auth, chat, sessions, execute, rag_api, scores, router_api, tasks, breaker, council_api, health, costs, monitor, events, metrics, analytics
+    from . import auth, chat, sessions, execute, rag_api, scores, router_api, tasks, breaker, health, costs, monitor, events, metrics, analytics
+    # from . import council_api  # DISABLED: Council 기능 비활성화 (Dual Loop에서 미사용)
     from .wpcn import wpcn_bp  # WPCN API
     from .rules import rules_bp  # Session Rules API
     from .flow_quality import flow_bp  # v2.6.1 Flow Quality API
@@ -39,7 +40,7 @@ def register_blueprints(app):
     app.register_blueprint(router_bp)
     app.register_blueprint(task_bp)
     app.register_blueprint(breaker_bp)
-    app.register_blueprint(council_bp)
+    # app.register_blueprint(council_bp)  # DISABLED
     app.register_blueprint(health_bp)
     app.register_blueprint(cost_bp)
     app.register_blueprint(monitor_bp)

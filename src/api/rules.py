@@ -22,9 +22,9 @@ def list_presets():
             "risk_profile": rules.risk_profile,
             "hash": rules.get_hash(),
             "summary": {
-                "market_order": rules.trading.market_order,
-                "max_order_usd": rules.trading.max_order_usd,
+                "secrets_hardcoding": rules.code.secrets_hardcoding,
                 "allow_skip_tests": rules.quality.allow_skip_tests,
+                "max_files_changed": rules.quality.max_files_changed,
             }
         })
     return jsonify(presets)
@@ -80,9 +80,9 @@ def validate_rules():
             "parsed": {
                 "mode": rules.mode,
                 "risk_profile": rules.risk_profile,
-                "trading": {
-                    "market_order": rules.trading.market_order,
-                    "max_order_usd": rules.trading.max_order_usd,
+                "code": {
+                    "secrets_hardcoding": rules.code.secrets_hardcoding,
+                    "forbid_infinite_loop": rules.code.forbid_infinite_loop,
                 },
                 "quality": {
                     "allow_skip_tests": rules.quality.allow_skip_tests,

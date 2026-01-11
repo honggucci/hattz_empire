@@ -2,7 +2,7 @@
 Hattz Empire - Agent Chain Orchestrator
 에이전트 간 자동 체인 호출 (Excavator → PM → Coder → QA)
 """
-from typing import Optional, Dict, Any, List
+from typing import Optional, Any, List
 from dataclasses import dataclass, field
 from enum import Enum
 import json

@@ -13,7 +13,6 @@ CEO 완성본
 from .constitution import CONSTITUTION_V1
 from .rules import (
     SessionRules,
-    TradingRules,
     CodeRules,
     QualityRules,
     RulesBlock,
@@ -48,7 +47,6 @@ __all__ = [
     "CONSTITUTION_V1",
     # Rules
     "SessionRules",
-    "TradingRules",
     "CodeRules",
     "QualityRules",
     "RulesBlock",

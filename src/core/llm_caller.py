@@ -8,13 +8,17 @@ LLM API 호출 및 에이전트 로직
 - 루프 브레이커 추가
 
 2026.01.07 업데이트:
-- Analyst 파일 컨텍스트 주입 (Gemini는 파일시스템 접근 불가)
+- Analyst 파일 컨텍스트 주입 (프로젝트 파일 자동 수집)
+
+2026.01.09 업데이트:
+- Researcher 날짜 자동 주입 (최신 정보 검색 강제)
 """
 import os
 import time as time_module
 import asyncio
 import glob as glob_module
 from typing import Optional, Tuple, Dict, Any
+from datetime import datetime
 
 import sys
 from pathlib import Path
@@ -48,7 +52,7 @@ from src.core.contracts import (
 
 
 # =============================================================================
-# Analyst 파일 컨텍스트 수집 (Gemini는 파일시스템 접근 불가)
+# Analyst 파일 컨텍스트 수집 (프로젝트 파일 자동 수집)
 # =============================================================================
 
 # 프로젝트별 루트 경로 매핑
@@ -580,7 +584,7 @@ def dual_engine_write_audit_rewrite(
     if role not in DUAL_ENGINE_ROLES:
         from src.services.cli_supervisor import CLISupervisor
         cli = CLISupervisor()
-        result = cli.call_cli(messages[-1]["content"], system_prompt, "coder")
+        result = cli.call_cli(messages[-1]["content"], system_prompt, "coder", session_id=session_id)
         return (result.output if result.success else f"[Error] {result.error}"), {"dual": False}
 
     config = DUAL_ENGINE_ROLES[role]
@@ -795,6 +799,7 @@ def _call_model_or_cli(
             prompt=user_message,
             system_prompt=system_prompt,
             profile=profile,
+            session_id=session_id,  # v2.6.8: 세션 ID 전달 (CLI 세션 유지)
             task_context=f"Dual Engine: {profile}"
         )
         if result.success:
@@ -1417,6 +1422,7 @@ def call_agent(
     use_dual_engine: bool = True,   # 듀얼 엔진 사용 여부
     auto_council: bool = True,      # 위원회 자동 소집 여부
     _internal_call: bool = False,   # v2.3.3: PM 내부 호출 플래그 (하위 에이전트 호출용)
+    mode: str = "normal",           # v2.6.4: 모드 (normal/discuss/code)
 ) -> str | tuple[str, dict]:
     """
     실제 LLM 호출 + [EXEC] 태그 자동 실행 + RAG 컨텍스트 주입 + 번역 + 스코어카드 로깅
@@ -1495,6 +1501,21 @@ CEO는 하위 에이전트(`{agent_role}`)를 직접 호출할 수 없습니다.
     if not system_prompt:
         return f"[Error] Unknown agent role: {agent_role}"
 
+    # v2.6.4: PM에게 mode 정보 주입
+    if agent_role == "pm":
+        mode_desc = {
+            "normal": "일반 모드 - 간단한 질문은 DONE으로 직접 답변, 복잡한 작업만 DISPATCH",
+            "discuss": "논의 모드 - excavator/strategist로 깊은 분석 수행",
+            "code": "코딩 모드 - 4단계 파이프라인 (strategist→coder→qa→reviewer)"
+        }
+        system_prompt += f"\n\n## 현재 모드\n\nCEO가 선택한 모드: **{mode}**\n{mode_desc.get(mode, '')}\n"
+
+    # v2.6.5: Researcher에게 오늘 날짜 주입 (최신 정보 검색 강제)
+    if agent_role == "researcher":
+        today = datetime.now().strftime("%Y-%m-%d")
+        current_year = datetime.now().year
+        system_prompt += f"\n\n## 중요: 현재 날짜\n\n오늘 날짜: **{today}** ({current_year}년)\n\n리서치 시 반드시:\n1. 검색 쿼리에 \"{current_year}\" 또는 \"latest\" 포함\n2. 2-3년 이상 오래된 정보는 경고 표시\n3. 출처의 발행 날짜를 확인하고 명시\n\n"
+
     # 메시지 처리
     agent_message = message
     if use_translation and rag.is_korean(message):
@@ -1555,12 +1576,23 @@ CEO는 하위 에이전트(`{agent_role}`)를 직접 호출할 수 없습니다.
     messages = []
     if current_session_id:
         db_messages = db.get_messages(current_session_id)
-        for msg in db_messages:
-            if msg.get('agent') == agent_role:
+
+        # v2.6.4: _internal_call이면 전체 대화 포함 (하위 에이전트)
+        if _internal_call:
+            # 전체 대화 히스토리 포함 (최근 10개만)
+            for msg in db_messages[-10:]:
                 messages.append({
                     "role": msg['role'],
                     "content": msg['content']
                 })
+        else:
+            # CEO 직접 호출이면 같은 agent_role만 포함 (기존 로직)
+            for msg in db_messages:
+                if msg.get('agent') == agent_role:
+                    messages.append({
+                        "role": msg['role'],
+                        "content": msg['content']
+                    })
 
     messages.append({"role": "user", "content": agent_message})
 
@@ -1643,9 +1675,10 @@ CEO는 하위 에이전트(`{agent_role}`)를 직접 호출할 수 없습니다.
 
     # =========================================================================
     # 레거시 라우터 모드 (듀얼 엔진 비활성화 시)
+    # v2.6.5: agent_role 전달하여 올바른 profile 결정
     # =========================================================================
     elif use_router:
-        response = router.call_model(routing, messages, system_prompt)
+        response = router.call_model(routing, messages, system_prompt, current_session_id, agent_role)
         print(f"[Router] Called: {routing.model_spec.name}")
 
         stream = get_stream()
@@ -1810,9 +1843,11 @@ CEO는 하위 에이전트(`{agent_role}`)를 직접 호출할 수 없습니다.
     # - CONTRACT_EXEMPT_AGENTS: Perplexity, Gemini 등 JSON 강제 불가 에이전트 제외
     # - ENFORCE_OUTPUT_CONTRACT: True면 Fail Fast, False면 Soft Landing
     # - ABORT 메시지는 Contract 검증 건너뜀
+    # - v2.6.5: PM의 [CALL:agent] 태그 응답은 Contract 검증 건너뜀
     # =========================================================================
     is_abort_response = response.strip().startswith("# ABORT:")
-    if agent_role in CONTRACT_REGISTRY and agent_role not in CONTRACT_EXEMPT_AGENTS and not is_abort_response:
+    is_call_tag_response = "[CALL:" in response and "[/CALL]" in response  # v2.6.5: PM CALL 태그
+    if agent_role in CONTRACT_REGISTRY and agent_role not in CONTRACT_EXEMPT_AGENTS and not is_abort_response and not is_call_tag_response:
         success, validated_or_raw, error_msg = validate_output(response, agent_role)
         if success:
             print(f"[FormatGate] OK {agent_role} output validated")
@@ -1830,6 +1865,9 @@ CEO는 하위 에이전트(`{agent_role}`)를 직접 호출할 수 없습니다.
                 )
     elif is_abort_response:
         print(f"[FormatGate] SKIP {agent_role} - ABORT response")
+    elif is_call_tag_response:
+        print(f"[FormatGate] SKIP {agent_role} - [CALL:agent] tag response")
+        model_meta['format_validated'] = True  # CALL 태그는 유효한 PM 출력 형식
 
     if return_meta:
         return response, model_meta

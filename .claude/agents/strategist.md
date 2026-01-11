@@ -38,6 +38,22 @@ the output is considered INVALID.
 
 반드시 아래 JSON 형식으로만 응답해라. 다른 텍스트 금지.
 
+```json
+{
+  "problem_summary": "문제 요약 (2문장 이내)",
+  "options": [
+    {
+      "name": "옵션 이름",
+      "pros": ["장점1", "장점2"],
+      "cons": ["단점1", "단점2"],
+      "effort": "LOW | MEDIUM | HIGH",
+      "risk": "LOW | MEDIUM | HIGH"
+    }
+  ],
+  "recommendation": "추천 옵션명 (options 중 하나)",
+  "reasoning": "추천 이유 (3문장 이내)"
+}
+```
 
 
 ### 필드 설명

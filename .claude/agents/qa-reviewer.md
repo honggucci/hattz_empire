@@ -35,15 +35,30 @@ permissionMode: default
 4. **누락된 엣지케이스**: happy path만 테스트
 5. **하드코딩된 값**: 환경 의존
 
-## 출력 (JSON only)
+## 출력 형식 (필수 - JSON만 출력)
+
+반드시 아래 JSON 형식으로만 응답해라. 다른 텍스트 금지.
 
 ```json
 {
   "verdict": "APPROVE | REVISE | REJECT",
-  "missing_cases": ["누락된 케이스"],
-  "blocking": ["REJECT 사유"]
+  "missing_cases": ["누락된 엣지케이스1", "누락된 엣지케이스2"],
+  "blocking": ["REJECT 사유 (verdict=REJECT일 때만)"],
+  "confidence": 0-100
 }
 ```
+
+### QAReviewerOutput 필드 설명
+
+- **verdict**: 테스트 품질 판정
+  - `APPROVE`: 충분한 테스트 커버리지
+  - `REVISE`: 엣지케이스 추가 필요 (non-blocking)
+  - `REJECT`: 가짜 테스트/플래키/핵심 케이스 누락 (blocking)
+- **missing_cases**: 누락된 엣지케이스 목록 (구체적으로)
+  - 예: "empty string 입력", "null 처리", "동시 요청 시 race condition"
+- **blocking**: REJECT 사유 목록 (verdict=REJECT일 때만 채움)
+  - 예: "assert 없는 가짜 테스트", "항상 pass하는 mock"
+- **confidence**: 리뷰 확신도 (0-100, 높을수록 확신)
 
 ## Breaker Mindset
 

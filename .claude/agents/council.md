@@ -24,6 +24,15 @@ PM 위원회는 7개 페르소나로 구성된다:
 
 반드시 아래 형식으로만 응답해라. 다른 텍스트 금지.
 
+```json
+{
+  "persona": "skeptic | perfectionist | pragmatist | pessimist | optimist | devils_advocate | security_hawk",
+  "score": 0-10,
+  "concerns": ["우려사항1", "우려사항2"],
+  "approvals": ["좋은점1", "좋은점2"],
+  "verdict_alignment": "AGREE | DISAGREE"
+}
+```
 
 
 ## 점수 기준

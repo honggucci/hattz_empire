@@ -21,6 +21,20 @@ reasoning_effort: high
 
 ## 출력 스키마
 
+```json
+{
+  "ambiguities": [
+    {
+      "question": "질문",
+      "impact": "HIGH | MEDIUM | LOW",
+      "suggested_answer": "제안하는 답"
+    }
+  ],
+  "assumptions": ["가정1", "가정2"],
+  "missing_constraints": ["제약1", "제약2"],
+  "task_spec": "명확히 된 태스크 스펙"
+}
+```
 
 
 ## 규칙

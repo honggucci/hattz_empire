@@ -8,17 +8,8 @@ import hashlib
 from typing import Literal, Optional, List
 from pydantic import BaseModel, Field
 
-Mode = Literal["live", "paper", "backtest", "dev"]
-RiskProfile = Literal["strict", "normal", "fast"]
-
-
-class TradingRules(BaseModel):
-    market_order: Literal["forbid", "allow"] = "forbid"
-    max_order_usd: Optional[float] = None
-    max_leverage: Optional[float] = 1
-    entry_limit_pct_below_last: Optional[float] = None
-    forbid_short: Optional[bool] = None
-    forbid_new_positions: Optional[bool] = None
+Mode = Literal["dev"]
+RiskProfile = Literal["normal"]
 
 
 class CodeRules(BaseModel):
@@ -35,7 +26,6 @@ class QualityRules(BaseModel):
 
 
 class RulesBlock(BaseModel):
-    trading: TradingRules = Field(default_factory=TradingRules)
     code: CodeRules = Field(default_factory=CodeRules)
     quality: QualityRules = Field(default_factory=QualityRules)
 

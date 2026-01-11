@@ -85,9 +85,8 @@ class ContextInjector:
 - Rules Hash: {rules.rules_hash()}
 
 [RULES SUMMARY]
-- Market Order: {rules.rules.trading.market_order}
-- Max Leverage: {rules.rules.trading.max_leverage}x
 - Secrets Hardcoding: {rules.rules.code.secrets_hardcoding}
+- Forbid Infinite Loop: {rules.rules.code.forbid_infinite_loop}
 - Allow Skip Tests: {rules.rules.quality.allow_skip_tests}
 - Max Files Changed: {rules.rules.quality.max_files_changed}
 

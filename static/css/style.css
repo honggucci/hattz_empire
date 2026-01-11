@@ -438,6 +438,7 @@ body.page-admin {
     align-items: center;
     gap: 6px;
     flex-shrink: 0;
+    position: relative;
 }
 
 /* Admin Dropdown */
@@ -448,7 +449,7 @@ body.page-admin {
 .admin-dropdown-btn {
     display: flex;
     align-items: center;
-    gap: 3px;
+    gap: 5px;
     padding: 4px 8px;
     background: var(--bg-tertiary);
     border: 1px solid var(--border-color);
@@ -458,6 +459,14 @@ body.page-admin {
     font-family: inherit;
     cursor: pointer;
     transition: all 0.2s;
+}
+
+.admin-dropdown-btn .status-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background-color: var(--accent-green);
+    flex-shrink: 0;
 }
 
 .admin-dropdown-btn:hover {
@@ -942,6 +951,61 @@ body.page-admin {
     flex-shrink: 0;  /* 입력창은 줄어들지 않음 */
 }
 
+/* v2.6.4 Mode Selector - 헤더 오른쪽에 */
+.mode-selector {
+    display: flex;
+    gap: 4px;
+    margin-right: 8px;
+}
+
+.mode-btn {
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.mode-btn:hover {
+    background: var(--bg-secondary);
+    transform: scale(1.05);
+}
+
+.mode-btn.active {
+    border-width: 2px;
+}
+
+.mode-icon {
+    font-size: 16px;
+}
+
+.mode-label {
+    display: none;
+}
+
+/* Mode별 색상 */
+.mode-btn[data-mode="normal"].active {
+    border-color: var(--accent-green);
+    background: rgba(63, 185, 80, 0.1);
+}
+
+.mode-btn[data-mode="discuss"].active {
+    border-color: var(--accent-purple);
+    background: rgba(163, 113, 247, 0.1);
+}
+
+.mode-btn[data-mode="code"].active {
+    border-color: var(--accent-blue);
+    background: rgba(88, 166, 255, 0.1);
+}
+
 .input-container {
     display: flex;
     gap: 12px;
@@ -1421,6 +1485,26 @@ body.page-admin {
     .chat-input-area {
         padding: 12px 16px;
         padding-bottom: max(12px, env(safe-area-inset-bottom));
+    }
+
+    /* v2.6.4 Mode buttons on mobile */
+    .mode-selector {
+        gap: 6px;
+        padding: 6px;
+        margin-bottom: 10px;
+    }
+
+    .mode-btn {
+        padding: 10px 8px;
+        gap: 4px;
+    }
+
+    .mode-icon {
+        font-size: 20px;
+    }
+
+    .mode-label {
+        font-size: 11px;
     }
 
     .input-container {
@@ -2469,4 +2553,372 @@ body.page-admin {
 
 .severity-low {
     color: var(--accent-green);
+}
+
+/* =============================================================================
+   Session Continue Modal - 이전 세션에서 이어가기 (v2.6.9)
+   ============================================================================= */
+
+.session-continue-modal {
+    max-width: 600px;
+    width: 95%;
+    max-height: 80vh;
+    display: flex;
+    flex-direction: column;
+    text-align: left;
+    padding: 0;
+}
+
+.session-continue-modal .modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 20px 24px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.session-continue-modal .modal-header h3 {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 0;
+}
+
+.modal-close-btn {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 24px;
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 4px;
+    transition: all 0.2s;
+}
+
+.modal-close-btn:hover {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+
+.session-continue-modal .modal-body {
+    flex: 1;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    padding: 20px 24px;
+}
+
+.modal-description {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-bottom: 16px;
+    line-height: 1.5;
+}
+
+/* 세션 검색 */
+.session-search {
+    margin-bottom: 16px;
+}
+
+.session-search input {
+    width: 100%;
+    padding: 10px 14px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    color: var(--text-primary);
+    font-size: 13px;
+    transition: border-color 0.2s;
+}
+
+.session-search input:focus {
+    outline: none;
+    border-color: var(--accent-blue);
+}
+
+.session-search input::placeholder {
+    color: var(--text-muted);
+}
+
+/* 세션 선택 목록 */
+.session-select-list {
+    flex: 1;
+    overflow-y: auto;
+    max-height: 200px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    margin-bottom: 16px;
+}
+
+.session-select-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    cursor: pointer;
+    border-bottom: 1px solid var(--border-color);
+    transition: all 0.2s;
+}
+
+.session-select-item:last-child {
+    border-bottom: none;
+}
+
+.session-select-item:hover {
+    background: var(--bg-tertiary);
+}
+
+.session-select-item.selected {
+    background: rgba(88, 166, 255, 0.1);
+    border-left: 3px solid var(--accent-blue);
+}
+
+.session-select-icon {
+    font-size: 18px;
+    min-width: 24px;
+    text-align: center;
+}
+
+.session-select-item.selected .session-select-icon {
+    color: var(--accent-blue);
+}
+
+.session-select-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.session-select-name {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-bottom: 4px;
+}
+
+.session-select-meta {
+    display: flex;
+    gap: 12px;
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+.session-select-project {
+    color: var(--accent-blue);
+}
+
+.no-sessions-select {
+    padding: 24px;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 13px;
+}
+
+/* 선택된 세션 미리보기 */
+.selected-session-preview {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 16px;
+    min-height: 120px;
+}
+
+.preview-placeholder,
+.preview-loading,
+.preview-error {
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 13px;
+    padding: 32px 16px;
+}
+
+.preview-loading {
+    color: var(--accent-blue);
+}
+
+.preview-error {
+    color: var(--accent-red);
+}
+
+.preview-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.preview-header strong {
+    font-size: 13px;
+    color: var(--text-primary);
+}
+
+.preview-count {
+    font-size: 11px;
+    color: var(--text-muted);
+    background: var(--bg-secondary);
+    padding: 2px 8px;
+    border-radius: 4px;
+}
+
+.preview-messages {
+    max-height: 100px;
+    overflow-y: auto;
+}
+
+.preview-message {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 6px 0;
+    font-size: 12px;
+}
+
+.preview-message.user {
+    color: var(--accent-blue);
+}
+
+.preview-message.assistant {
+    color: var(--text-secondary);
+}
+
+.preview-role {
+    font-size: 14px;
+}
+
+.preview-content {
+    flex: 1;
+    line-height: 1.4;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.preview-empty {
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 12px;
+    padding: 16px;
+}
+
+.preview-footer {
+    margin-top: 12px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border-color);
+}
+
+.preview-footer small {
+    color: var(--accent-green);
+    font-size: 11px;
+}
+
+/* 모달 푸터 */
+.session-continue-modal .modal-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 12px;
+    padding: 16px 24px;
+    border-top: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+}
+
+/* 이어가기 버튼 */
+#continue-session-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 12px;
+    font-size: 12px;
+}
+
+#continue-session-btn .btn-icon {
+    font-size: 14px;
+}
+
+/* 컨텍스트 메시지 스타일 */
+.message.system.context-message {
+    background: linear-gradient(135deg,
+        rgba(88, 166, 255, 0.1) 0%,
+        rgba(163, 113, 247, 0.1) 100%);
+    border: 1px solid rgba(88, 166, 255, 0.3);
+    border-left: 4px solid var(--accent-blue);
+}
+
+.message.system.context-message .agent-badge.system {
+    background: rgba(88, 166, 255, 0.2);
+    color: var(--accent-blue);
+}
+
+.context-message details {
+    cursor: pointer;
+}
+
+.context-message summary {
+    padding: 8px 0;
+    font-size: 13px;
+    color: var(--accent-blue);
+    font-weight: 500;
+}
+
+.context-message summary:hover {
+    text-decoration: underline;
+}
+
+.context-message .context-content {
+    margin-top: 12px;
+    padding: 12px;
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 6px;
+    font-size: 12px;
+    line-height: 1.6;
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+/* 이어가기 환영 메시지 */
+.welcome-message.continue-welcome {
+    background: linear-gradient(135deg,
+        rgba(88, 166, 255, 0.05) 0%,
+        rgba(63, 185, 80, 0.05) 100%);
+    border: 1px dashed var(--accent-blue);
+}
+
+.welcome-message.continue-welcome h2 {
+    color: var(--accent-blue);
+}
+
+/* 사이드바 버튼 레이아웃 */
+.sidebar-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 20px;
+}
+
+/* hidden 클래스 */
+.modal-overlay.hidden {
+    display: none;
+}
+
+/* 반응형 */
+@media (max-width: 768px) {
+    .session-continue-modal {
+        max-height: 90vh;
+        margin: 16px;
+    }
+
+    .session-select-list {
+        max-height: 150px;
+    }
+
+    #continue-session-btn .btn-text {
+        display: none;
+    }
+
+    #continue-session-btn {
+        padding: 8px;
+    }
 }

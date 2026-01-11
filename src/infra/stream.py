@@ -13,7 +13,6 @@ Hattz Empire - Stream Logger
       └── task_001.yaml       # Task별 정리
 """
 import json
-import os
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Any

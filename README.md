@@ -1,11 +1,11 @@
 # HATTZ EMPIRE - AI Orchestration System
 
-[![Version](https://img.shields.io/badge/version-v2.6.0-blue.svg)](https://github.com/hattz/hattz-empire)
+[![Version](https://img.shields.io/badge/version-v2.6.9-blue.svg)](https://github.com/hattz/hattz-empire)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11+-yellow.svg)](https://python.org)
 
-> **2026.01.07 | 부트로더 원칙 + PM DFA + Semantic Guard**
-> **FLOW는 프롬프트가 아니라 부트로더다**
+> **2026.01.09 | Researcher Claude CLI 전환 + 날짜 자동 주입**
+> **무조건 최신 정보만 리서치**
 
 ---
 
@@ -93,24 +93,25 @@ ngrok http 5000 --domain=your-domain.ngrok-free.app
 
 ---
 
-## 모델 티어 시스템 v2.6
+## 모델 티어 시스템 v2.6.5
 
 ```
 ┌──────────────┬──────────────────────────┬───────────────────────────────────┐
 │     티어     │          모델            │             용도                  │
 ├──────────────┼──────────────────────────┼───────────────────────────────────┤
-│ BUDGET       │ Gemini 2.0 Flash         │ Analyst (로그 압축)               │
+│ EXEC         │ Claude CLI Opus 4.5      │ PM, Coder, Excavator              │
+│              │ Claude CLI Sonnet 4.5    │ QA, Reviewer, Analyst, Researcher │
 ├──────────────┼──────────────────────────┼───────────────────────────────────┤
-│ EXEC         │ Claude CLI Opus 4.5      │ Coder Writer (코드 구현)          │
-│              │ Claude CLI Sonnet 4      │ PM, QA, Auditor, Stamp, Council   │
-├──────────────┼──────────────────────────┼───────────────────────────────────┤
-│ VIP-THINKING │ GPT-5.2 Thinking Extended│ Strategist/Excavator Writer       │
-├──────────────┼──────────────────────────┼───────────────────────────────────┤
-│ RESEARCH     │ Perplexity Sonar Pro     │ Researcher Writer, "검색/" 프리픽스│
+│ VIP-THINKING │ GPT-5.2 Thinking Extended│ Strategist                        │
 ├──────────────┼──────────────────────────┼───────────────────────────────────┤
 │ VIP-AUDIT    │ Claude CLI Opus 4.5      │ "최고/" 프리픽스                  │
 └──────────────┴──────────────────────────┴───────────────────────────────────┘
 ```
+
+**v2.6.5 주요 변경:**
+- Researcher: Perplexity Sonar Pro → Claude CLI Sonnet 4.5
+- 날짜 자동 주입으로 최신 정보 강제 검색
+- API 비용 절감 (Perplexity 제거)
 
 ---
 
@@ -134,9 +135,9 @@ ngrok http 5000 --domain=your-domain.ngrok-free.app
 │          │ profile: qa             │ profile: reviewer       │ profile: reviewer       │
 │          │ Test Designer           │ Breaker                 │ Strict Verdict Clerk    │
 ├──────────┼─────────────────────────┼─────────────────────────┼─────────────────────────┤
-│researcher│ Perplexity Sonar Pro    │ Claude CLI Sonnet 4     │ Claude CLI Sonnet 4     │
-│          │                         │ profile: reviewer       │ profile: reviewer       │
-│          │ Source Harvester        │ Fact Sentinel           │ Strict Verdict Clerk    │
+│researcher│ Claude CLI Sonnet 4.5   │ (단일 엔진)             │ (단일 엔진)             │
+│          │ profile: researcher     │                         │                         │
+│          │ Source Harvester + 날짜 자동 주입 (최신 정보 강제)                          │
 ├──────────┼─────────────────────────┼─────────────────────────┼─────────────────────────┤
 │excavator │ GPT-5.2 Thinking        │ Claude CLI Sonnet 4     │ Claude CLI Sonnet 4     │
 │          │ Extended                │ profile: reviewer       │ profile: reviewer       │
@@ -146,9 +147,11 @@ ngrok http 5000 --domain=your-domain.ngrok-free.app
 ┌─────────────────────────────────────────────────────────────────────────────────────────┐
 │                                  SINGLE ENGINE                                          │
 ├──────────┬──────────────────────────────────────────────────────────────────────────────┤
-│ pm       │ Claude CLI Sonnet 4 (profile: reviewer) - Bureaucrat Router                 │
+│ pm       │ Claude CLI Opus 4.5 (profile: pm) - Bureaucrat Router                       │
 ├──────────┼──────────────────────────────────────────────────────────────────────────────┤
-│ analyst  │ Gemini 2.0 Flash - Log Summarizer                                           │
+│ analyst  │ Claude CLI Sonnet 4.5 (profile: analyst) - Log Summarizer                   │
+├──────────┼──────────────────────────────────────────────────────────────────────────────┤
+│researcher│ Claude CLI Sonnet 4.5 (profile: researcher) - Source Harvester + 날짜 주입  │
 └──────────┴──────────────────────────────────────────────────────────────────────────────┘
 ```
 

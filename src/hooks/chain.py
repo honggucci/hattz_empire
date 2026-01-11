@@ -9,7 +9,7 @@ CEO 완성본 - Worker 루프에 끼워넣을 훅 체인
 4. 에러 핸들링 및 롤백
 """
 from __future__ import annotations
-from typing import List, Dict, Any, Optional, Callable
+from typing import List, Dict, Optional, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 

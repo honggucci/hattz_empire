@@ -9,7 +9,6 @@ CEO 완성본 - verdict + rules_hash + evidence + required_fixes 저장
 4. 이벤트 버스로 REVIEW_FINISHED 발행
 """
 from __future__ import annotations
-from typing import Optional
 from datetime import datetime
 
 from .base import Hook, HookContext, HookResult, HookStage

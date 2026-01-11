@@ -8,7 +8,7 @@ LLM 출력 형식 강제 + 형식 게이트
 - 파싱 실패 = 즉시 재시도 (PM까지 안 감)
 - "응답 형식 오류"라는 말 자체가 사라져야 함
 """
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional, Literal
 from enum import Enum
 import json
@@ -159,7 +159,7 @@ class StrategistOutput(BaseModel):
 class TaskSpec(BaseModel):
     """PM이 생성하는 태스크 스펙"""
     task_id: str = Field(..., description="태스크 ID")
-    agent: Literal["coder", "qa", "reviewer", "strategist", "analyst", "researcher"]
+    agent: Literal["coder", "qa", "reviewer", "strategist", "analyst", "researcher", "excavator"]
     instruction: str = Field(..., description="에이전트에게 전달할 지시")
     context: Optional[str] = Field(None, description="추가 컨텍스트")
     priority: Literal["HIGH", "MEDIUM", "LOW"] = "MEDIUM"
@@ -169,14 +169,22 @@ class PMOutput(BaseModel):
     """
     PM 출력 계약 - 라우팅 결정 + 태스크 생성
 
-    v2.5.1: 필드 축소 + 길이 제한
+    v2.6.4: BLOCKED, RETRY 추가
+    v2.6.5: summary 길이 제한 완화 (100 → 300자) + 자동 잘라내기
     - PM은 판단만, 설명은 짧게
-    - summary 100자 제한 (시인 되는 거 방지)
     """
-    action: Literal["DISPATCH", "ESCALATE", "DONE"] = Field(..., description="다음 액션")
+    action: Literal["DISPATCH", "ESCALATE", "DONE", "BLOCKED", "RETRY"] = Field(..., description="다음 액션")
     tasks: List[TaskSpec] = Field(default_factory=list, description="생성된 태스크 목록 (DISPATCH일 때)")
-    summary: str = Field(..., description="CEO 보고 요약 (100자 이내)", max_length=100)
+    summary: str = Field(..., description="CEO 보고 요약 (300자 이내)")
     requires_ceo: bool = Field(False, description="CEO 승인 필요 여부")
+
+    @field_validator('summary', mode='before')
+    @classmethod
+    def truncate_summary(cls, v: str) -> str:
+        """v2.6.5: summary가 300자 초과 시 자동 잘라내기"""
+        if isinstance(v, str) and len(v) > 300:
+            return v[:297] + "..."
+        return v
 
     class Config:
         json_schema_extra = {

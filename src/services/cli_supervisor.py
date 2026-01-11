@@ -2,6 +2,11 @@
 Hattz Empire - Claude Code CLI Supervisor
 Claude Code CLI 호출 + 세션 관리 + 에러 복구
 
+v2.6.9: Session Memory 통합
+- parent_session_id로 이전 세션 연결
+- 계층적 요약 (Level 0/1/2) 기반 컨텍스트 주입
+- get_session_context()로 ~1000 토큰 컨텍스트 생성
+
 v2.5.3: CLI Semantic Guard 추가
 - 코드 기반 의미 검증 (LLM 없이)
 - 금지 패턴 블랙리스트 (의미적 NULL 감지)
@@ -348,7 +353,9 @@ class SemanticGuard:
             "security_score": {
                 "range": (0, 10),
             },
-            "risks_if_reject": True,  # REJECT면 risks 있어야
+            "risks": {
+                "risks_if_reject": True,  # REJECT면 risks 있어야
+            },
         },
         "council": {
             "score": {
@@ -539,61 +546,224 @@ CLI_CONFIG = {
 
 # Claude CLI 실행 경로 (Windows PATH 문제 우회)
 # 환경에 따라 자동 감지: 1) PATH, 2) node 직접 실행, 3) npm global cmd
-def _get_claude_cli_path() -> str:
-    """Claude CLI 실행 경로 반환"""
+def _get_claude_cli_path():
+    """
+    Claude CLI 실행 경로 반환 (v2.6.5: 리스트 형태)
+
+    Returns:
+        List[str]: subprocess.Popen에 직접 전달할 명령 리스트
+    """
     import shutil
     import os
-
-    # 1. PATH에서 찾기 (제대로 설정된 환경)
-    claude_path = shutil.which("claude")
-    if claude_path:
-        return "claude"
 
     # npm global 경로
     npm_global = os.path.expanduser("~\\AppData\\Roaming\\npm")
     cli_js = os.path.join(npm_global, "node_modules", "@anthropic-ai", "claude-code", "cli.js")
 
-    # 2. Node.js로 직접 실행 (PATH에 node 없는 경우 대비)
-    # Windows에서 가장 신뢰할 수 있는 방식
+    # Node.js 경로 감지
     node_candidates = [
-        shutil.which("node"),
         "C:\\Program Files\\nodejs\\node.exe",
+        "C:\\Program Files (x86)\\nodejs\\node.exe",
         os.path.expanduser("~\\AppData\\Local\\Programs\\nodejs\\node.exe"),
+        shutil.which("node"),
     ]
 
     for node_path in node_candidates:
         if node_path and os.path.exists(node_path) and os.path.exists(cli_js):
-            return f'"{node_path}" "{cli_js}"'
+            print(f"[CLI-Supervisor] Found: node={node_path}, cli={cli_js}")
+            return [node_path, cli_js]
 
-    # 3. npm global cmd (node가 PATH에 있는 경우만 작동)
-    claude_cmd = os.path.join(npm_global, "claude.cmd")
-    if os.path.exists(claude_cmd):
-        return f'"{claude_cmd}"'
+    # Fallback: claude in PATH
+    claude_path = shutil.which("claude")
+    if claude_path:
+        print(f"[CLI-Supervisor] Found: claude={claude_path}")
+        return [claude_path]
 
-    # Fallback: 그냥 claude
-    return "claude"
+    # Last resort
+    print("[CLI-Supervisor] WARNING: Claude CLI not found, using 'claude' fallback")
+    return ["claude"]
 
 CLAUDE_CLI_PATH = _get_claude_cli_path()
 
-# v2.4.2: 프로필별 모델 설정 (API 비용 0원 - CLI만 사용)
-# PM/coder/excavator = Opus (고품질 라우팅/코드/분석)
-# reviewer/qa/council = Sonnet (빠른 검증)
+# v2.6.4: 프로필별 모델 설정 (API 비용 0원 - CLI만 사용)
+# PM/coder/excavator = Opus 4.5 (고품질 라우팅/코드/분석)
+# reviewer/qa/council = Sonnet 4.5 (빠른 검증)
 CLI_PROFILE_MODELS = {
-    "pm": "claude-opus-4-5-20251101",         # PM 라우팅 = Opus (v2.4.2)
-    "coder": "claude-opus-4-5-20251101",      # 코드 작성 = Opus
-    "excavator": "claude-opus-4-5-20251101",  # 의도 발굴 = Opus
-    "qa": "claude-sonnet-4-5-20250514",       # QA 검증 = Sonnet 4.5
-    "reviewer": "claude-sonnet-4-5-20250514", # 리뷰/검토 = Sonnet 4.5
-    "council": "claude-sonnet-4-5-20250514",  # 위원회 = Sonnet 4.5 (v2.4.2)
-    "default": "claude-sonnet-4-5-20250514",  # 기본값 = Sonnet 4.5
+    "pm": "claude-opus-4-5-20251101",         # PM 라우팅 = Opus 4.5
+    "coder": "claude-opus-4-5-20251101",      # 코드 작성 = Opus 4.5
+    "excavator": "claude-opus-4-5-20251101",  # 의도 발굴 = Opus 4.5
+    "qa": "claude-sonnet-4-5-20250929",       # QA 검증 = Sonnet 4.5
+    "reviewer": "claude-sonnet-4-5-20250929", # 리뷰/검토 = Sonnet 4.5
+    "analyst": "claude-sonnet-4-5-20250929",  # v2.6.4: 로그 분석 = Sonnet 4.5
+    "researcher": "claude-sonnet-4-5-20250929",  # v2.6.5: 리서치 = Sonnet 4.5
+    "council": "claude-sonnet-4-5-20250929",  # 위원회 = Sonnet 4.5
+    "default": "claude-sonnet-4-5-20250929",  # 기본값 = Sonnet 4.5
 }
 
-# 역할별 세션 UUID 저장소 (task_id:role -> session_uuid)
-_session_registry: Dict[str, str] = {}
+# v2.6.8: 메모리 캐시 (DB 조회 최소화용)
+# DB가 primary, 메모리는 캐시 역할
+_session_cache: Dict[str, Dict[str, Any]] = {}
 
 # 위원회 세션 UUID 저장소 (task_id:role:persona -> session_uuid)
 # 각 위원회 멤버가 독립된 CLI 세션을 가짐
 _committee_session_registry: Dict[str, str] = {}
+
+# v2.6.8: DB 기반 세션 관리 활성화 여부
+USE_DB_SESSION = True
+
+# v2.6.8: JSONL 폴백 설정
+JSONL_CONVERSATIONS_DIR = Path(__file__).parent.parent / "infra" / "conversations" / "stream"
+JSONL_CONTEXT_MESSAGES = 10  # 폴백 시 로드할 최근 메시지 수
+
+
+def load_jsonl_context(session_id: str, profile: str, max_messages: int = None) -> List[Dict]:
+    """
+    JSONL에서 최근 대화 컨텍스트 로드 (v2.6.8 - 세션 만료 시 폴백)
+
+    CLI 세션이 만료되거나 복구 불가능할 때 JSONL에서 최근 대화를 로드합니다.
+
+    Args:
+        session_id: 채팅 세션 ID (chat_session_id)
+        profile: CLI 프로필 (coder, qa, reviewer 등)
+        max_messages: 로드할 최대 메시지 수 (기본: JSONL_CONTEXT_MESSAGES)
+
+    Returns:
+        최근 대화 메시지 리스트 [{"role": "user/assistant", "content": "..."}]
+    """
+    if max_messages is None:
+        max_messages = JSONL_CONTEXT_MESSAGES
+
+    if not JSONL_CONVERSATIONS_DIR.exists():
+        print(f"[CLI-Supervisor] JSONL 디렉토리 없음: {JSONL_CONVERSATIONS_DIR}")
+        return []
+
+    # 모든 JSONL 파일에서 해당 세션의 메시지 수집
+    all_messages = []
+
+    # 최근 파일부터 역순으로 탐색 (최대 7일)
+    jsonl_files = sorted(JSONL_CONVERSATIONS_DIR.glob("*.jsonl"), reverse=True)[:7]
+
+    for jsonl_file in jsonl_files:
+        try:
+            with open(jsonl_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        msg = json.loads(line)
+
+                        # 해당 프로필과 관련된 메시지만 필터링
+                        from_agent = msg.get("from_agent", "")
+                        to_agent = msg.get("to_agent", "")
+
+                        # 프로필 관련 메시지인지 확인
+                        is_relevant = (
+                            from_agent == profile or
+                            to_agent == profile or
+                            (from_agent == "ceo" and to_agent == "pm")  # CEO→PM 요청도 포함
+                        )
+
+                        if is_relevant and msg.get("content"):
+                            all_messages.append({
+                                "timestamp": msg.get("t", ""),
+                                "from": from_agent,
+                                "to": to_agent,
+                                "type": msg.get("type", ""),
+                                "content": msg.get("content", ""),
+                                "parent_id": msg.get("parent_id", "")
+                            })
+                    except json.JSONDecodeError:
+                        continue
+        except Exception as e:
+            print(f"[CLI-Supervisor] JSONL 파일 읽기 실패 {jsonl_file}: {e}")
+            continue
+
+    # 시간순 정렬 후 최근 N개
+    all_messages.sort(key=lambda x: x.get("timestamp", ""))
+    recent_messages = all_messages[-max_messages:]
+
+    # Claude CLI 형식으로 변환
+    context_messages = []
+    for msg in recent_messages:
+        role = "user" if msg["type"] == "request" else "assistant"
+        content = msg["content"]
+
+        # 컨텍스트 길이 제한 (메시지당 최대 2000자)
+        if len(content) > 2000:
+            content = content[:2000] + "\n... (truncated)"
+
+        context_messages.append({
+            "role": role,
+            "content": content
+        })
+
+    print(f"[CLI-Supervisor] JSONL 컨텍스트 로드: {len(context_messages)}개 메시지 (profile={profile})")
+    return context_messages
+
+
+def build_context_prompt(context_messages: List[Dict]) -> str:
+    """
+    컨텍스트 메시지를 프롬프트 문자열로 변환 (v2.6.8)
+
+    Args:
+        context_messages: load_jsonl_context()에서 반환된 메시지 리스트
+
+    Returns:
+        프롬프트에 주입할 컨텍스트 문자열
+    """
+    if not context_messages:
+        return ""
+
+    context_parts = ["[이전 대화 컨텍스트]"]
+
+    for msg in context_messages:
+        role = "사용자" if msg["role"] == "user" else "어시스턴트"
+        context_parts.append(f"<{role}>\n{msg['content']}\n</{role}>")
+
+    context_parts.append("[/이전 대화 컨텍스트]\n\n위 컨텍스트를 참고하여 다음 요청을 처리하세요.\n")
+
+    return "\n\n".join(context_parts)
+
+
+def check_cli_session_expired(session_uuid: str) -> bool:
+    """
+    CLI 세션 파일 존재 여부 확인 (v2.6.8)
+
+    Claude CLI는 세션 파일을 %APPDATA%\\Claude\\sessions\\에 저장합니다.
+    파일이 없으면 세션이 만료된 것으로 간주합니다.
+
+    Args:
+        session_uuid: CLI 세션 UUID
+
+    Returns:
+        True if expired (file not exists), False if valid
+    """
+    if os.name == 'nt':  # Windows
+        sessions_dir = Path(os.environ.get('APPDATA', '')) / "Claude" / "sessions"
+    else:  # Unix/Mac
+        sessions_dir = Path.home() / ".claude" / "sessions"
+
+    session_file = sessions_dir / f"{session_uuid}.json"
+
+    if not session_file.exists():
+        print(f"[CLI-Supervisor] 세션 파일 없음 (만료): {session_file}")
+        return True
+
+    # 파일 수정 시간 확인 (24시간 이상이면 만료로 간주)
+    try:
+        mtime = session_file.stat().st_mtime
+        age_hours = (time.time() - mtime) / 3600
+
+        if age_hours > 24:
+            print(f"[CLI-Supervisor] 세션 파일 오래됨 ({age_hours:.1f}시간): {session_file}")
+            return True
+    except Exception as e:
+        print(f"[CLI-Supervisor] 세션 파일 확인 실패: {e}")
+        return True
+
+    return False
+
 
 # 컨텍스트 초과 에러 패턴
 CONTEXT_OVERFLOW_PATTERNS = [
@@ -1078,7 +1248,7 @@ class CLISupervisor:
         self,
         prompt: str,
         system_prompt: str = "",
-        profile: str = "coder",
+        profile: str = None,  # v2.6.4: None = no persona (일반 대화)
         session_id: str = None,
         task_context: str = ""
     ) -> CLIResult:
@@ -1096,6 +1266,7 @@ class CLISupervisor:
             CLIResult
         """
         self.retry_count = 0
+        self._current_session_id = session_id  # v2.6.6: 세션 ID 저장 (세션 유지용)
         original_prompt = prompt  # 에스컬레이션용 원본 저장
         original_profile = profile
         current_profile = profile
@@ -1107,10 +1278,21 @@ class CLISupervisor:
         while self.retry_count <= self.config["max_retries"]:
             try:
                 result = self._execute_cli(full_prompt, current_profile)
+                print(f"[CLI-Supervisor] result.success={result.success}, result.error={repr(result.error)}, result.exit_code={result.exit_code}")
 
                 # 성공
                 if result.success:
-                    # v2.5: JSON 출력 검증
+                    # v2.6.5: JSON 출력 검증 (coder/qa/council만)
+                    # profile=None (일반 대화)는 JSON 검증 완전 스킵
+                    require_json_profiles = ["coder", "qa", "council"]
+                    require_json = current_profile in require_json_profiles if current_profile else False
+
+                    # v2.6.5: profile=None이면 JSON 검증 스킵
+                    if not require_json:
+                        print(f"[CLI-Supervisor] profile={current_profile}, JSON 검증 스킵 (자연어 대화)")
+                        return result
+
+                    # JSON 검증 (필수 프로필만)
                     is_valid, error_msg, parsed = self._validate_json_output(result.output, current_profile)
 
                     if is_valid:
@@ -1186,8 +1368,8 @@ class CLISupervisor:
                                 )
                                 self.retry_count += 1
                                 continue
-                    else:
-                        # v2.5.2: JSON 검증 실패 - Retry Escalation 적용
+                    elif require_json:
+                        # v2.5.2: JSON 검증 실패 (JSON 필수 프로필만) - Retry Escalation 적용
                         missing_fields = self._extract_missing_fields(error_msg)
                         error_type = self._classify_error_type(error_msg)
 
@@ -1244,6 +1426,10 @@ class CLISupervisor:
                             )
                             self.retry_count += 1
                             continue
+                    else:
+                        # v2.6.4: JSON 불필요 프로필 (reviewer 등) - JSON 없어도 성공
+                        print(f"[CLI-Supervisor] JSON 검증 스킵 (profile={current_profile}, JSON 불필요)")
+                        return result
 
                 # ABORT 감지
                 if self._is_abort(result.output):
@@ -1265,22 +1451,8 @@ class CLISupervisor:
                     self.retry_count += 1
                     continue
 
-                # 세션 충돌 에러 - 에스컬레이션 없이 리셋 후 재시도
-                if self._is_session_conflict(result.error or result.output or ""):
-                    if self.retry_count < self.config["max_retries"]:
-                        print(f"[CLI-Supervisor] 세션 충돌 감지! 세션 리셋 후 재시도")
-                        self.reset_session(current_profile)
-                        self.retry_count += 1
-                        time.sleep(1)
-                        continue
-                    else:
-                        return CLIResult(
-                            success=False,
-                            output="",
-                            error="세션 충돌 지속 (재시도 초과)",
-                            aborted=True,
-                            abort_reason="SESSION_CONFLICT_MAX_RETRIES"
-                        )
+                # 세션 충돌 에러 처리 제거 (v2.6.4)
+                # 매 요청마다 새 UUID를 생성하므로 세션 충돌은 발생하지 않음
 
                 # 치명적 에러 - 에스컬레이션 없이 즉시 실패
                 if self._is_fatal_error(result.error or ""):
@@ -1345,6 +1517,10 @@ class CLISupervisor:
 
             except Exception as e:
                 self.last_error = str(e)
+                # v2.6.4: 상세 traceback 로깅
+                import traceback
+                print(f"[CLI-Supervisor] Exception in call_cli:")
+                traceback.print_exc()
                 return CLIResult(
                     success=False,
                     output="",
@@ -1387,46 +1563,120 @@ class CLISupervisor:
 
     def _execute_cli(self, prompt: str, profile: str) -> CLIResult:
         """실제 CLI 실행 (Popen으로 프로세스 추적)"""
-        # Claude Code CLI 명령 구성
-        cmd = self._build_cli_command(prompt, profile)
-        task_id = f"cli_{int(time.time())}_{uuid.uuid4().hex[:6]}"
+        global _session_cache
 
+        # Claude Code CLI 명령 구성
+        task_id = f"cli_{int(time.time())}_{uuid.uuid4().hex[:6]}"
         print(f"[CLI-Supervisor] 실행 중... (profile: {profile}, task: {task_id})")
+
+        # v2.6.5: CLI 명령과 프롬프트 분리 (stdin 직접 전달)
+        profile_key = profile if profile else "default"
+        allowed_tools = self._get_allowed_tools(profile) if profile else None
+
+        # v2.6.8: session_id를 전달하여 세션 유지 + --resume 사용 (DB 기반 + JSONL 폴백)
+        current_session_id = getattr(self, '_current_session_id', None)
+        session_uuid, context_prompt = self._get_or_create_session_uuid(profile_key, current_session_id)
+        model = CLI_PROFILE_MODELS.get(profile_key, CLI_PROFILE_MODELS["default"])
+
+        # v2.6.8: 세션 만료로 컨텍스트가 로드된 경우 프롬프트에 주입
+        if context_prompt:
+            print(f"[CLI-Supervisor] JSONL 컨텍스트 주입: {len(context_prompt)}자")
+            prompt = context_prompt + "\n\n" + prompt
+
+        # v2.6.8: 첫 호출 vs 이후 호출 구분 (DB/캐시 기반)
+        # 키 생성 (session_id:profile 또는 default:profile)
+        session_key = f"{current_session_id}:{profile_key}" if current_session_id else f"default:{profile_key}"
+
+        # 캐시 또는 DB에서 호출 횟수 가져오기
+        call_count = 0
+        if session_key in _session_cache:
+            call_count = _session_cache[session_key].get("call_count", 0)
+        elif USE_DB_SESSION:
+            try:
+                from src.services.database import get_cli_session
+                db_session = get_cli_session(session_key)
+                if db_session:
+                    call_count = db_session.get("call_count", 0)
+            except Exception as e:
+                print(f"[CLI-Supervisor] DB 호출 횟수 조회 실패: {e}")
+
+        is_first_call = (call_count == 0)
+
+        # CLAUDE_CLI_PATH는 이제 리스트 (예: ['C:\\Program Files\\nodejs\\node.exe', 'cli.js'])
+        if is_first_call:
+            # 첫 호출: --session-id로 세션 생성
+            cmd_parts = CLAUDE_CLI_PATH + ['--print', '--model', model, '--session-id', session_uuid, '--dangerously-skip-permissions']
+            print(f"[CLI-Supervisor] 첫 호출 - --session-id 사용: {session_uuid[:8]}...")
+        else:
+            # 이후 호출: --resume으로 세션 복원 (대화 이어짐)
+            cmd_parts = CLAUDE_CLI_PATH + ['--print', '--model', model, '--resume', session_uuid, '--dangerously-skip-permissions']
+            print(f"[CLI-Supervisor] 이후 호출 ({call_count}번째) - --resume 사용: {session_uuid[:8]}...")
+
+        if allowed_tools:
+            cmd_parts.extend(['--allowedTools', ','.join(allowed_tools)])
+
+        print(f"[CLI-Supervisor] CLI: {' '.join(CLAUDE_CLI_PATH)}")
+        print(f"[CLI-Supervisor] Model: {model} (profile: {profile})")
 
         proc = None
         try:
-            # Popen으로 프로세스 시작 (추적 가능)
-            # encoding="utf-8"로 이모지/한글 처리 (Windows cp949 문제 해결)
+            # v2.6.5: stdin을 UTF-8 bytes로 직접 전달 (PowerShell/chcp 우회)
             proc = subprocess.Popen(
-                cmd,
-                shell=True,
-                cwd=self.working_dir,
+                cmd_parts,
+                stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                text=True,
-                encoding="utf-8",
-                errors="replace",  # 디코딩 실패 시 ? 로 대체
+                cwd=self.working_dir,
                 env={
                     **os.environ,
                     "CLAUDE_CODE_NONINTERACTIVE": "1",
-                    "PYTHONIOENCODING": "utf-8",  # Windows _readerthread 인코딩 강제
                 }
             )
 
             # 프로세스 등록 (좀비 추적용)
             register_process(task_id, proc)
 
-            # 타임아웃 대기
-            stdout, stderr = proc.communicate(timeout=self.config["timeout_seconds"])
+            # UTF-8 bytes로 stdin 전달
+            prompt_bytes = prompt.encode('utf-8')
+            stdout_bytes, stderr_bytes = proc.communicate(input=prompt_bytes, timeout=self.config["timeout_seconds"])
+
+            # UTF-8로 디코딩
+            stdout = stdout_bytes.decode('utf-8', errors='replace')
+            stderr = stderr_bytes.decode('utf-8', errors='replace')
 
             output = stdout
             if len(output) > self.config["output_max_chars"]:
                 output = output[:self.config["output_max_chars"]] + "\n... (출력 잘림)"
 
+            # v2.6.8: 성공 시 호출 횟수 증가 (DB + 캐시)
+            if proc.returncode == 0:
+                new_count = call_count + 1
+
+                # 캐시 업데이트
+                if session_key in _session_cache:
+                    _session_cache[session_key]["call_count"] = new_count
+                else:
+                    _session_cache[session_key] = {
+                        "cli_uuid": session_uuid,
+                        "call_count": new_count,
+                        "profile": profile_key,
+                        "chat_session_id": current_session_id
+                    }
+
+                # DB 업데이트 (v2.6.8)
+                if USE_DB_SESSION:
+                    try:
+                        from src.services.database import increment_cli_session_call_count
+                        increment_cli_session_call_count(session_key)
+                    except Exception as e:
+                        print(f"[CLI-Supervisor] DB 호출 횟수 업데이트 실패: {e}")
+
+                print(f"[CLI-Supervisor] 세션 호출 횟수 증가: {session_key} -> {new_count}")
+
             return CLIResult(
                 success=proc.returncode == 0,
                 output=output,
-                error=stderr if proc.returncode != 0 else None,
+                error=stderr if stderr.strip() else None,  # v2.6.4: 빈 문자열은 None 처리
                 exit_code=proc.returncode,
                 retry_count=self.retry_count
             )
@@ -1439,63 +1689,253 @@ class CLISupervisor:
                 proc.wait(timeout=5)
             raise
 
+        except Exception as e:
+            # 일반 예외 시에도 프로세스 강제 종료 (좀비 방지)
+            if proc and proc.poll() is None:  # 프로세스가 아직 실행 중이면
+                print(f"[CLI-Supervisor] 예외 발생 - 프로세스 강제 종료 (PID={proc.pid}, error={str(e)[:100]})")
+                try:
+                    proc.kill()
+                    proc.wait(timeout=5)
+                except Exception as kill_err:
+                    print(f"[CLI-Supervisor] 프로세스 종료 실패: {kill_err}")
+            raise
+
         finally:
             # 프로세스 해제
             unregister_process(task_id)
 
-    def _build_cli_command(self, prompt: str, profile: str) -> str:
-        """CLI 명령어 생성"""
-        # 프롬프트를 임시 파일로 저장
-        import tempfile
 
-        # Windows에서 안전하게 처리
-        prompt_file = Path(tempfile.gettempdir()) / f"claude_prompt_{int(time.time())}.txt"
-        prompt_file.write_text(prompt, encoding="utf-8")
+    def _get_or_create_session_uuid(self, profile: str, session_id: str = None) -> Tuple[str, str]:
+        """
+        세션 UUID 생성 또는 재사용 (v2.6.8 - DB 영속화 + JSONL 폴백)
 
-        # Claude Code CLI 명령 (--print 모드: 비대화형)
-        # 서브에이전트 사용: .claude/agents/{profile}.md 자동 로드
-        # --allowedTools로 프로필별 도구 제한
-        # --session-id: 역할별 세션 UUID로 대화 연속성 보장
-        # --model: 프로필별 모델 지정 (v2.4)
-        allowed_tools = self._get_allowed_tools(profile)
-        session_uuid = self._get_or_create_session_uuid(profile)
-        model = CLI_PROFILE_MODELS.get(profile, CLI_PROFILE_MODELS["default"])
+        - session_id가 있으면: session_id:profile 조합으로 키 생성 → 세션 유지
+        - session_id가 없으면: profile만으로 키 생성 → 프로필별 기본 세션
+        - CLI 세션 파일 만료 시: 새 세션 생성 + JSONL에서 컨텍스트 로드
 
-        cmd = f'{CLAUDE_CLI_PATH} --print --model {model} --session-id {session_uuid} --dangerously-skip-permissions'
-        if allowed_tools:
-            cmd += f' --allowedTools "{",".join(allowed_tools)}"'
-        cmd += f' < "{prompt_file}"'
+        v2.6.8: DB에 저장하여 서버 재시작해도 세션 UUID 유지
 
-        print(f"[CLI-Supervisor] CLI: {CLAUDE_CLI_PATH}")
-        print(f"[CLI-Supervisor] Model: {model} (profile: {profile})")
+        Returns:
+            Tuple[str, str]: (session_uuid, context_prompt)
+            - context_prompt: 세션 만료로 새로 생성된 경우 JSONL 컨텍스트, 아니면 빈 문자열
+        """
+        global _session_cache
 
-        return cmd
+        # 키 생성: session_id가 있으면 세션별, 없으면 프로필별
+        key = f"{session_id}:{profile}" if session_id else f"default:{profile}"
+        context_prompt = ""  # JSONL 컨텍스트 (세션 만료 시에만 사용)
 
-    def _get_or_create_session_uuid(self, profile: str, task_id: str = None) -> str:
-        """역할별 세션 UUID 반환 (없으면 생성)"""
-        global _session_registry
+        # 1. 메모리 캐시 확인
+        if key in _session_cache:
+            cached = _session_cache[key]
+            cli_uuid = cached['cli_uuid']
 
-        # 키: task_id가 있으면 task:role, 없으면 role만
-        key = f"{task_id}:{profile}" if task_id else profile
+            # v2.6.8: CLI 세션 파일 만료 확인
+            if check_cli_session_expired(cli_uuid):
+                print(f"[CLI-Supervisor] 캐시된 세션 만료 감지: {key} -> {cli_uuid[:8]}...")
 
-        if key not in _session_registry:
-            _session_registry[key] = str(uuid.uuid4())
-            print(f"[CLI-Supervisor] 새 세션 생성: {key} -> {_session_registry[key][:8]}...")
+                # JSONL에서 컨텍스트 로드
+                if session_id:
+                    jsonl_context = load_jsonl_context(session_id, profile)
+                    context_prompt = build_context_prompt(jsonl_context)
 
-        return _session_registry[key]
+                # 새 세션으로 교체
+                new_uuid = str(uuid.uuid4())
+                _session_cache[key] = {
+                    "cli_uuid": new_uuid,
+                    "call_count": 0,
+                    "profile": profile,
+                    "chat_session_id": session_id
+                }
 
-    def reset_session(self, profile: str = None, task_id: str = None):
-        """세션 리셋 (컨텍스트 초과 시 호출)"""
-        global _session_registry
+                # DB 업데이트
+                if USE_DB_SESSION:
+                    try:
+                        from src.services.database import upsert_cli_session
+                        upsert_cli_session(
+                            session_key=key,
+                            cli_uuid=new_uuid,
+                            call_count=0,
+                            profile=profile,
+                            chat_session_id=session_id
+                        )
+                    except Exception as e:
+                        print(f"[CLI-Supervisor] DB 세션 교체 실패: {e}")
 
-        if profile:
-            key = f"{task_id}:{profile}" if task_id else profile
-            if key in _session_registry:
-                del _session_registry[key]
-                print(f"[CLI-Supervisor] 세션 리셋: {key}")
+                print(f"[CLI-Supervisor] 세션 교체 (만료→신규): {key} -> {new_uuid[:8]}... (context={len(context_prompt)}자)")
+                return new_uuid, context_prompt
+
+            print(f"[CLI-Supervisor] 캐시에서 세션 로드: {key} -> {cli_uuid[:8]}...")
+            return cli_uuid, ""
+
+        # 2. DB 조회 (v2.6.8)
+        if USE_DB_SESSION:
+            try:
+                from src.services.database import get_cli_session, upsert_cli_session, create_cli_sessions_table
+
+                # 테이블 없으면 생성
+                create_cli_sessions_table()
+
+                db_session = get_cli_session(key)
+                if db_session:
+                    cli_uuid = db_session['cli_uuid']
+
+                    # v2.6.8: CLI 세션 파일 만료 확인
+                    if check_cli_session_expired(cli_uuid):
+                        print(f"[CLI-Supervisor] DB 세션 만료 감지: {key} -> {cli_uuid[:8]}...")
+
+                        # JSONL에서 컨텍스트 로드
+                        if session_id:
+                            jsonl_context = load_jsonl_context(session_id, profile)
+                            context_prompt = build_context_prompt(jsonl_context)
+
+                        # 새 세션으로 교체
+                        new_uuid = str(uuid.uuid4())
+                        upsert_cli_session(
+                            session_key=key,
+                            cli_uuid=new_uuid,
+                            call_count=0,
+                            profile=profile,
+                            chat_session_id=session_id
+                        )
+                        _session_cache[key] = {
+                            "cli_uuid": new_uuid,
+                            "call_count": 0,
+                            "profile": profile,
+                            "chat_session_id": session_id
+                        }
+
+                        print(f"[CLI-Supervisor] 세션 교체 (DB 만료→신규): {key} -> {new_uuid[:8]}... (context={len(context_prompt)}자)")
+                        return new_uuid, context_prompt
+
+                    # DB에서 복구 (유효한 세션)
+                    _session_cache[key] = db_session
+                    print(f"[CLI-Supervisor] DB에서 세션 복구: {key} -> {cli_uuid[:8]}... (call_count={db_session['call_count']})")
+                    return cli_uuid, ""
+
+                # 새 세션 생성 후 DB 저장
+                new_uuid = str(uuid.uuid4())
+                upsert_cli_session(
+                    session_key=key,
+                    cli_uuid=new_uuid,
+                    call_count=0,
+                    profile=profile,
+                    chat_session_id=session_id
+                )
+                _session_cache[key] = {
+                    "cli_uuid": new_uuid,
+                    "call_count": 0,
+                    "profile": profile,
+                    "chat_session_id": session_id
+                }
+                print(f"[CLI-Supervisor] 새 세션 생성 (DB): {key} -> {new_uuid[:8]}...")
+                return new_uuid, ""
+
+            except Exception as e:
+                print(f"[CLI-Supervisor] DB 세션 관리 실패, 메모리 폴백: {e}")
+                # DB 실패 시 메모리 기반으로 폴백
+
+        # 3. 메모리 기반 폴백
+        new_uuid = str(uuid.uuid4())
+        _session_cache[key] = {
+            "cli_uuid": new_uuid,
+            "call_count": 0,
+            "profile": profile,
+            "chat_session_id": session_id
+        }
+        print(f"[CLI-Supervisor] 새 세션 생성 (메모리): {key} -> {new_uuid[:8]}...")
+        return new_uuid, ""
+
+    def reset_session(self, profile: str = None, session_id: str = None):
+        """
+        세션 리셋 (v2.6.8 - DB 연동)
+
+        특정 세션 또는 프로필의 세션 UUID와 호출 횟수를 삭제하여 새 세션을 시작할 수 있게 합니다.
+        DB와 메모리 캐시 모두 정리합니다.
+
+        Args:
+            profile: 프로필 (coder, qa, reviewer 등)
+            session_id: 세션 ID (chat session)
+        """
+        global _session_cache
+
+        deleted_count = 0
+
+        if session_id and profile:
+            # 특정 세션 + 프로필 조합 삭제
+            key = f"{session_id}:{profile}"
+
+            # 캐시 삭제
+            if key in _session_cache:
+                del _session_cache[key]
+                deleted_count += 1
+
+            # DB 삭제 (v2.6.8)
+            if USE_DB_SESSION:
+                try:
+                    from src.services.database import delete_cli_session
+                    db_deleted = delete_cli_session(session_key=key)
+                    if db_deleted > deleted_count:
+                        deleted_count = db_deleted
+                except Exception as e:
+                    print(f"[CLI-Supervisor] DB 세션 삭제 실패: {e}")
+
+            print(f"[CLI-Supervisor] 세션 리셋: {key}")
+
+        elif profile:
+            # 해당 프로필의 모든 세션 삭제
+            keys_to_delete = [k for k in _session_cache if k.endswith(f":{profile}")]
+            for k in keys_to_delete:
+                del _session_cache[k]
+            deleted_count = len(keys_to_delete)
+
+            # DB 삭제 (v2.6.8)
+            if USE_DB_SESSION:
+                try:
+                    from src.services.database import delete_cli_session
+                    db_deleted = delete_cli_session(profile=profile)
+                    if db_deleted > deleted_count:
+                        deleted_count = db_deleted
+                except Exception as e:
+                    print(f"[CLI-Supervisor] DB 프로필 세션 삭제 실패: {e}")
+
+            print(f"[CLI-Supervisor] 프로필 세션 리셋: {profile} ({deleted_count}개)")
+
+        elif session_id:
+            # 해당 세션의 모든 프로필 삭제
+            keys_to_delete = [k for k in _session_cache if k.startswith(f"{session_id}:")]
+            for k in keys_to_delete:
+                del _session_cache[k]
+            deleted_count = len(keys_to_delete)
+
+            # DB 삭제 (v2.6.8)
+            if USE_DB_SESSION:
+                try:
+                    from src.services.database import delete_cli_session
+                    db_deleted = delete_cli_session(chat_session_id=session_id)
+                    if db_deleted > deleted_count:
+                        deleted_count = db_deleted
+                except Exception as e:
+                    print(f"[CLI-Supervisor] DB 세션 전체 삭제 실패: {e}")
+
+            print(f"[CLI-Supervisor] 세션 전체 리셋: {session_id} ({deleted_count}개)")
+
         else:
-            _session_registry.clear()
-            print("[CLI-Supervisor] 전체 세션 리셋")
+            # 전체 리셋
+            deleted_count = len(_session_cache)
+            _session_cache.clear()
+
+            # DB 전체 삭제 (v2.6.8)
+            if USE_DB_SESSION:
+                try:
+                    from src.services.database import delete_cli_session
+                    db_deleted = delete_cli_session()  # 모든 세션 삭제
+                    if db_deleted > deleted_count:
+                        deleted_count = db_deleted
+                except Exception as e:
+                    print(f"[CLI-Supervisor] DB 전체 세션 삭제 실패: {e}")
+
+            print(f"[CLI-Supervisor] 전체 세션 리셋: {deleted_count}개")
 
     # =========================================================================
     # Committee Session Management (위원회 세션 관리)
@@ -1586,48 +2026,42 @@ class CLISupervisor:
 {prompt}
 [/TASK]"""
 
-        # CLI 명령 구성 (페르소나별 독립 세션)
-        import tempfile
-        prompt_file = Path(tempfile.gettempdir()) / f"claude_committee_{int(time.time())}_{persona}.txt"
-        prompt_file.write_text(full_prompt, encoding="utf-8")
-
-        # 프로필별 도구 제한 및 모델 지정 (v2.4)
+        # v2.6.5: CLI 명령 구성 (stdin 직접 전달)
         allowed_tools = self._get_allowed_tools(role)
         model = CLI_PROFILE_MODELS.get(role, CLI_PROFILE_MODELS["default"])
 
-        cmd = f'{CLAUDE_CLI_PATH} --print --model {model} --session-id {session_uuid} --dangerously-skip-permissions'
+        # CLAUDE_CLI_PATH는 이제 리스트
+        cmd_parts = CLAUDE_CLI_PATH + ['--print', '--model', model, '--session-id', session_uuid, '--dangerously-skip-permissions']
         if allowed_tools:
-            cmd += f' --allowedTools "{",".join(allowed_tools)}"'
-        cmd += f' < "{prompt_file}"'
+            cmd_parts.extend(['--allowedTools', ','.join(allowed_tools)])
 
         print(f"[CLI-Supervisor] 위원회 호출: {role}:{persona} (model: {model}, session: {session_uuid[:8]}...)")
 
         try:
-            # encoding="utf-8"로 이모지/한글 처리 (Windows cp949 문제 해결)
+            # v2.6.5: stdin을 UTF-8 bytes로 직접 전달 (PowerShell/chcp 우회)
             result = subprocess.run(
-                cmd,
-                shell=True,
-                cwd=self.working_dir,
+                cmd_parts,
+                input=full_prompt.encode('utf-8'),
                 capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
+                cwd=self.working_dir,
                 timeout=self.config["timeout_seconds"],
                 env={
                     **os.environ,
                     "CLAUDE_CODE_NONINTERACTIVE": "1",
-                    "PYTHONIOENCODING": "utf-8",
                 }
             )
 
-            output = result.stdout
+            # UTF-8로 디코딩
+            output = result.stdout.decode('utf-8', errors='replace')
+            stderr = result.stderr.decode('utf-8', errors='replace')
+
             if len(output) > self.config["output_max_chars"]:
                 output = output[:self.config["output_max_chars"]] + "\n... (출력 잘림)"
 
             return CLIResult(
                 success=result.returncode == 0,
                 output=output,
-                error=result.stderr if result.returncode != 0 else None,
+                error=stderr if result.returncode != 0 else None,
                 exit_code=result.returncode
             )
 
@@ -1662,7 +2096,7 @@ class CLISupervisor:
         profile: str,
         task_context: str
     ) -> str:
-        """프롬프트 구성"""
+        """프롬프트 구성 (v2.6.9: 이전 세션 컨텍스트 주입)"""
         parts = []
 
         # 시스템 프롬프트
@@ -1674,6 +2108,11 @@ class CLISupervisor:
         if profile_rules:
             parts.append(f"[RULES]\n{profile_rules}\n[/RULES]\n")
 
+        # v2.6.9: 이전 세션 컨텍스트 주입 (parent_session_id 있을 때)
+        prev_context = self._get_previous_session_context()
+        if prev_context:
+            parts.append(prev_context)
+
         # 태스크 컨텍스트
         if task_context:
             parts.append(f"[CONTEXT]\n{task_context}\n[/CONTEXT]\n")
@@ -1682,6 +2121,44 @@ class CLISupervisor:
         parts.append(f"[TASK]\n{prompt}\n[/TASK]")
 
         return "\n".join(parts)
+
+    def _get_previous_session_context(self) -> str:
+        """
+        v2.6.9: 이전 세션 컨텍스트 조회
+
+        현재 세션에 parent_session_id가 있으면 이전 세션의 요약을 가져옵니다.
+
+        Returns:
+            이전 세션 컨텍스트 문자열 (없으면 빈 문자열)
+        """
+        if not self._current_session_id:
+            return ""
+
+        try:
+            from src.services.database import get_session
+            from src.services.session_memory import get_parent_session_context
+
+            # 현재 세션 정보 조회
+            session = get_session(self._current_session_id)
+            if not session:
+                return ""
+
+            # parent_session_id 확인
+            parent_session_id = session.get("parent_session_id")
+            if not parent_session_id:
+                return ""
+
+            # 이전 세션 컨텍스트 가져오기
+            context = get_parent_session_context(parent_session_id)
+            if context:
+                print(f"[CLI-Supervisor] 이전 세션 컨텍스트 주입: {parent_session_id[:8]}... ({len(context)} chars)")
+                return context
+
+            return ""
+
+        except Exception as e:
+            print(f"[CLI-Supervisor] 이전 세션 컨텍스트 조회 오류: {e}")
+            return ""
 
     def _get_profile_rules(self, profile: str) -> str:
         """
@@ -1771,7 +2248,10 @@ score: 0-10 (소수점 가능)
 금지: 설명, 인사
 JSON 외 출력 = 즉시 FAIL"""
         }
-        return rules.get(profile, rules["coder"])
+        # v2.6.5: profile=None이면 빈 문자열 반환 (PM 등 페르소나 자체 규칙 사용)
+        if profile is None:
+            return ""
+        return rules.get(profile, "")
 
     def _is_abort(self, output: str) -> bool:
         """ABORT 태그 감지"""
@@ -1960,7 +2440,7 @@ def get_supervisor() -> CLISupervisor:
 def call_claude_cli(
     messages: List[Dict[str, str]],
     system_prompt: str = "",
-    profile: str = "coder",
+    profile: str = None,  # v2.6.4: None = no persona (일반 대화)
     session_id: str = None
 ) -> str:
     """

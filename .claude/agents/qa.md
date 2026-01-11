@@ -23,25 +23,31 @@ permissionMode: default
 
 ```json
 {
-  "verdict": "PASS",
+  "verdict": "PASS | FAIL | SKIP",
   "tests": [
-    {"name": "test_login_success", "result": "PASS", "reason": null},
-    {"name": "test_login_fail", "result": "PASS", "reason": null}
+    {
+      "name": "test_login_success",
+      "result": "PASS | FAIL | SKIP",
+      "reason": "실패 시 이유 (성공 시 null)"
+    }
   ],
-  "coverage_summary": "85% (34/40 lines)",
-  "issues_found": []
+  "coverage_summary": "85% (34/40 lines) (선택)",
+  "issues_found": ["이슈 설명1", "이슈 설명2"]
 }
 ```
 
-### 필드 설명
+### QAOutput 필드 설명
 
-- **verdict**: 전체 판정 - `PASS` | `FAIL` | `SKIP`
-- **tests**: 개별 테스트 결과 배열
-  - `name`: 테스트 이름
-  - `result`: `PASS` | `FAIL` | `SKIP`
-  - `reason`: 실패 시 이유 (성공 시 null)
-- **coverage_summary**: 커버리지 요약 (선택)
-- **issues_found**: 발견된 이슈 목록 (문자열 배열)
+- **verdict**: 전체 판정
+  - `PASS`: 모든 테스트 통과
+  - `FAIL`: 하나 이상 실패
+  - `SKIP`: 테스트 불가 (환경 문제 등)
+- **tests**: 개별 테스트 결과 배열 (1~3개)
+  - `name`: 테스트 함수명 (예: test_login_success)
+  - `result`: PASS | FAIL | SKIP
+  - `reason`: 실패/스킵 이유 (성공 시 null)
+- **coverage_summary**: 커버리지 요약 (선택, 예: "85% (34/40 lines)")
+- **issues_found**: 발견된 버그/이슈 목록 (문자열 배열, 없으면 [])
 
 ## 규칙
 

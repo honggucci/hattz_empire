@@ -7,12 +7,16 @@ Hattz Empire - AI Orchestration System
 # VERSION - Single Source of Truth
 # 이 값만 변경하면 문서 동기화 스크립트가 전체 업데이트
 # =============================================================================
-VERSION = "2.6.0"
-VERSION_DATE = "2026-01-07"
-VERSION_CODENAME = "Analytics Dashboard + RAG Agent Filter"
+VERSION = "2.6.9"
+VERSION_DATE = "2026-01-11"
+VERSION_CODENAME = "Session Memory + Hierarchical Summary"
 
 # 버전 히스토리
 VERSION_HISTORY = {
+    "2.6.9": "Session Memory + Hierarchical Summary (2026-01-11)",
+    "2.6.8": "CLI Session DB Persistence (2026-01-10)",
+    "2.6.5": "Researcher Claude CLI + Date Auto-Injection (2026-01-09)",
+    "2.6.4": "Mode System + PM JSON to NL (2026-01-09)",
     "2.6.0": "Analytics Dashboard + RAG Agent Filter (2026-01-07)",
     "2.5.5": "부트로더 원칙 + PM DFA + Semantic Guard (2026-01-07)",
     "2.5.4": "PM Decision Machine + Retry Escalation (2026-01-07)",
@@ -129,14 +133,11 @@ CEO_PROFILE = """
 # =============================================================================
 
 AGENT_CONFIG = {
-    # PM = 뇌. Thinking Extend 모드로 깊은 사고 + JSON 출력
+    # PM = v2.6.4: Claude CLI Sonnet 4 (일반 모드용)
     "pm": {
-        "provider": "openai_responses",
-        "model": "gpt-5.2-pro",
-        "tier": "VIP_THINKING",
-        "reasoning_effort": "high",  # v2.2: medium → high (Thinking Extend)
-        "temperature": 0.2,
-        "max_output_tokens": 520,  # v2.2: 320→520 (thinking 출력 고려)
+        "provider": "claude_cli",
+        "tier": "EXEC",
+        "profile": "reviewer",  # Sonnet 4 사용
         "prompt_id": "prompt_pm_v2_1",
     },
 
@@ -358,12 +359,14 @@ DUAL_ENGINES = {
 # CLI 프로필 설정 (claude_cli provider용)
 CLI_PROFILES = {
     "pm": "reviewer",       # PM은 분석/검토 프로필
-    "analyst": None,        # analyst는 Gemini 유지
+    "analyst": "analyst",   # v2.6.4: Analyst → Claude CLI Sonnet 4.5
+    "researcher": "researcher",  # v2.6.5: Researcher → Claude CLI Sonnet 4.5
 }
 
 SINGLE_ENGINES = {
     "pm": "claude_cli",                    # v2.4: PM → Claude CLI (EXEC)
-    "analyst": MODELS["gemini_flash"],     # 로그 분석은 싼 거 써 (눈 역할)
+    "analyst": "claude_cli",               # v2.6.4: Analyst → Claude CLI Sonnet 4.5
+    "researcher": "claude_cli",            # v2.6.5: Researcher → Claude CLI Sonnet 4.5
 }
 
 
@@ -924,7 +927,7 @@ CEO가 핵심을 빠르게 파악할 수 있도록 이모지를 적극 활용해
 **⚠️ 주의**: "백업/임베딩 시스템이 없다"고 CEO에게 보고하지 마라. 위 시스템이 이미 구축되어 있다!
 """,
 
-    "analyst": """You are the Analyst of Hattz Empire (Gemini 3.0 Pro - 1M Context).
+    "analyst": """You are the Analyst of Hattz Empire (Claude CLI Sonnet 4.5).
 
 ## Temperament: Detective + Skeptic
 - "이 로그에서 뭔가 이상해"

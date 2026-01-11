@@ -40,26 +40,68 @@ def get_db_connection():
 # Session CRUD
 # =============================================================================
 
-def create_session(name: Optional[str] = None, project: Optional[str] = None, agent: str = "pm") -> str:
+def create_session(
+    name: Optional[str] = None,
+    project: Optional[str] = None,
+    agent: str = "pm",
+    parent_session_id: Optional[str] = None  # v2.6.9: 이전 세션 이어가기
+) -> str:
     """새 세션 생성, session_id 반환"""
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO chat_sessions (name, project, agent)
-            OUTPUT INSERTED.id
-            VALUES (?, ?, ?)
-        """, (name, project, agent))
+
+        # v2.6.9: parent_session_id 지원
+        if parent_session_id:
+            cursor.execute("""
+                INSERT INTO chat_sessions (name, project, agent, parent_session_id)
+                OUTPUT INSERTED.id
+                VALUES (?, ?, ?, ?)
+            """, (name, project, agent, parent_session_id))
+        else:
+            cursor.execute("""
+                INSERT INTO chat_sessions (name, project, agent)
+                OUTPUT INSERTED.id
+                VALUES (?, ?, ?)
+            """, (name, project, agent))
+
         session_id = str(cursor.fetchone()[0])
         conn.commit()
         return session_id
+
+
+def add_parent_session_id_column() -> bool:
+    """chat_sessions 테이블에 parent_session_id 컬럼 추가 (v2.6.9 마이그레이션)"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        try:
+            # 컬럼 존재 확인
+            cursor.execute("""
+                SELECT 1 FROM sys.columns
+                WHERE object_id = OBJECT_ID('chat_sessions')
+                AND name = 'parent_session_id'
+            """)
+            if not cursor.fetchone():
+                cursor.execute("""
+                    ALTER TABLE chat_sessions
+                    ADD parent_session_id VARCHAR(50) NULL
+                """)
+                conn.commit()
+                print("[Migration] Added parent_session_id column to chat_sessions")
+            return True
+        except Exception as e:
+            print(f"[Migration] parent_session_id column error: {e}")
+            return False
 
 
 def get_session(session_id: str) -> Optional[Dict[str, Any]]:
     """세션 조회"""
     with get_db_connection() as conn:
         cursor = conn.cursor()
+        # v2.6.9: parent_session_id 추가 (컬럼 없으면 NULL 반환)
         cursor.execute("""
-            SELECT id, name, project, agent, created_at, updated_at
+            SELECT id, name, project, agent, created_at, updated_at,
+                   CASE WHEN COL_LENGTH('chat_sessions', 'parent_session_id') IS NOT NULL
+                        THEN parent_session_id ELSE NULL END as parent_session_id
             FROM chat_sessions
             WHERE id = ?
         """, (session_id,))
@@ -72,6 +114,7 @@ def get_session(session_id: str) -> Optional[Dict[str, Any]]:
                 "agent": row.agent,
                 "created_at": row.created_at.isoformat() if row.created_at else None,
                 "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+                "parent_session_id": row.parent_session_id if hasattr(row, 'parent_session_id') else None,
             }
         return None
 
@@ -657,6 +700,317 @@ def get_recent_log_id(session_id: Optional[str] = None) -> Optional[str]:
             """)
         row = cursor.fetchone()
         return row.id if row else None
+
+
+# =============================================================================
+# CLI Sessions (v2.6.8 - 세션 영속화)
+# =============================================================================
+
+def create_cli_sessions_table() -> bool:
+    """cli_sessions 테이블 생성 (서버 재시작 시 세션 UUID 유지용)"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'cli_sessions')
+            BEGIN
+                CREATE TABLE cli_sessions (
+                    session_key VARCHAR(200) PRIMARY KEY,
+                    cli_uuid VARCHAR(50) NOT NULL,
+                    call_count INT DEFAULT 0,
+                    profile VARCHAR(50),
+                    chat_session_id VARCHAR(50),
+                    created_at DATETIME DEFAULT GETDATE(),
+                    updated_at DATETIME DEFAULT GETDATE(),
+                    last_used_at DATETIME DEFAULT GETDATE()
+                );
+                CREATE INDEX idx_cli_sessions_chat ON cli_sessions(chat_session_id);
+                CREATE INDEX idx_cli_sessions_profile ON cli_sessions(profile);
+            END
+        """)
+        conn.commit()
+        return True
+
+
+def get_cli_session(session_key: str) -> Optional[Dict[str, Any]]:
+    """CLI 세션 UUID 조회"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT session_key, cli_uuid, call_count, profile, chat_session_id,
+                   created_at, updated_at, last_used_at
+            FROM cli_sessions
+            WHERE session_key = ?
+        """, (session_key,))
+        row = cursor.fetchone()
+        if row:
+            return {
+                "session_key": row.session_key,
+                "cli_uuid": row.cli_uuid,
+                "call_count": row.call_count,
+                "profile": row.profile,
+                "chat_session_id": row.chat_session_id,
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+                "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+                "last_used_at": row.last_used_at.isoformat() if row.last_used_at else None,
+            }
+        return None
+
+
+def upsert_cli_session(
+    session_key: str,
+    cli_uuid: str,
+    call_count: int = 0,
+    profile: str = None,
+    chat_session_id: str = None
+) -> bool:
+    """CLI 세션 저장/업데이트 (UPSERT)"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        # MERGE 대신 간단한 DELETE + INSERT (MSSQL MERGE 문법 복잡)
+        cursor.execute("""
+            IF EXISTS (SELECT 1 FROM cli_sessions WHERE session_key = ?)
+            BEGIN
+                UPDATE cli_sessions
+                SET call_count = ?, updated_at = GETDATE(), last_used_at = GETDATE()
+                WHERE session_key = ?
+            END
+            ELSE
+            BEGIN
+                INSERT INTO cli_sessions (session_key, cli_uuid, call_count, profile, chat_session_id)
+                VALUES (?, ?, ?, ?, ?)
+            END
+        """, (session_key, call_count, session_key, session_key, cli_uuid, call_count, profile, chat_session_id))
+        conn.commit()
+        return True
+
+
+def increment_cli_session_call_count(session_key: str) -> int:
+    """CLI 세션 호출 횟수 증가 (반환: 새 호출 횟수)"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE cli_sessions
+            SET call_count = call_count + 1, last_used_at = GETDATE()
+            OUTPUT INSERTED.call_count
+            WHERE session_key = ?
+        """, (session_key,))
+        row = cursor.fetchone()
+        conn.commit()
+        return row[0] if row else 0
+
+
+def delete_cli_session(session_key: str = None, profile: str = None, chat_session_id: str = None) -> int:
+    """CLI 세션 삭제 (조건별)"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+
+        if session_key:
+            cursor.execute("DELETE FROM cli_sessions WHERE session_key = ?", (session_key,))
+        elif profile:
+            cursor.execute("DELETE FROM cli_sessions WHERE profile = ?", (profile,))
+        elif chat_session_id:
+            cursor.execute("DELETE FROM cli_sessions WHERE chat_session_id = ?", (chat_session_id,))
+        else:
+            cursor.execute("DELETE FROM cli_sessions")
+
+        count = cursor.rowcount
+        conn.commit()
+        return count
+
+
+def get_all_cli_sessions(chat_session_id: str = None) -> List[Dict[str, Any]]:
+    """모든 CLI 세션 조회 (디버깅/모니터링용)"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+
+        if chat_session_id:
+            cursor.execute("""
+                SELECT session_key, cli_uuid, call_count, profile, chat_session_id, last_used_at
+                FROM cli_sessions
+                WHERE chat_session_id = ?
+                ORDER BY last_used_at DESC
+            """, (chat_session_id,))
+        else:
+            cursor.execute("""
+                SELECT TOP 100 session_key, cli_uuid, call_count, profile, chat_session_id, last_used_at
+                FROM cli_sessions
+                ORDER BY last_used_at DESC
+            """)
+
+        sessions = []
+        for row in cursor.fetchall():
+            sessions.append({
+                "session_key": row.session_key,
+                "cli_uuid": row.cli_uuid,
+                "call_count": row.call_count,
+                "profile": row.profile,
+                "chat_session_id": row.chat_session_id,
+                "last_used_at": row.last_used_at.isoformat() if row.last_used_at else None,
+            })
+        return sessions
+
+
+# =============================================================================
+# Session Summaries (v2.6.9 - Hierarchical Summary)
+# =============================================================================
+
+def create_session_summaries_table() -> bool:
+    """session_summaries 테이블 생성 (계층적 요약 저장)"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'session_summaries')
+            BEGIN
+                CREATE TABLE session_summaries (
+                    id INT IDENTITY PRIMARY KEY,
+                    session_id VARCHAR(50) NOT NULL,
+                    level INT NOT NULL,              -- 0: 턴 요약, 1: 청크 요약, 2: 메타 요약
+                    chunk_start INT,                 -- 시작 턴 번호
+                    chunk_end INT,                   -- 끝 턴 번호
+                    summary NVARCHAR(MAX),
+                    token_count INT DEFAULT 0,
+                    created_at DATETIME DEFAULT GETDATE()
+                );
+                CREATE INDEX idx_summaries_session ON session_summaries(session_id);
+                CREATE INDEX idx_summaries_level ON session_summaries(session_id, level);
+            END
+        """)
+        conn.commit()
+        return True
+
+
+def add_session_summary(
+    session_id: str,
+    level: int,
+    summary: str,
+    chunk_start: int = None,
+    chunk_end: int = None,
+    token_count: int = 0
+) -> int:
+    """세션 요약 추가"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO session_summaries (session_id, level, chunk_start, chunk_end, summary, token_count)
+            OUTPUT INSERTED.id
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (session_id, level, chunk_start, chunk_end, summary, token_count))
+        result = cursor.fetchone()
+        conn.commit()
+        return result[0] if result else 0
+
+
+def get_session_summaries(session_id: str, level: int = None) -> List[Dict[str, Any]]:
+    """세션 요약 조회 (레벨별 필터링 가능)"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+
+        if level is not None:
+            cursor.execute("""
+                SELECT id, session_id, level, chunk_start, chunk_end, summary, token_count, created_at
+                FROM session_summaries
+                WHERE session_id = ? AND level = ?
+                ORDER BY chunk_start ASC, created_at ASC
+            """, (session_id, level))
+        else:
+            cursor.execute("""
+                SELECT id, session_id, level, chunk_start, chunk_end, summary, token_count, created_at
+                FROM session_summaries
+                WHERE session_id = ?
+                ORDER BY level DESC, chunk_start ASC
+            """, (session_id,))
+
+        summaries = []
+        for row in cursor.fetchall():
+            summaries.append({
+                "id": row.id,
+                "session_id": row.session_id,
+                "level": row.level,
+                "chunk_start": row.chunk_start,
+                "chunk_end": row.chunk_end,
+                "summary": row.summary,
+                "token_count": row.token_count,
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+            })
+        return summaries
+
+
+def get_latest_summary(session_id: str, level: int) -> Optional[Dict[str, Any]]:
+    """특정 레벨의 가장 최근 요약 조회"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT TOP 1 id, session_id, level, chunk_start, chunk_end, summary, token_count, created_at
+            FROM session_summaries
+            WHERE session_id = ? AND level = ?
+            ORDER BY created_at DESC
+        """, (session_id, level))
+        row = cursor.fetchone()
+        if row:
+            return {
+                "id": row.id,
+                "session_id": row.session_id,
+                "level": row.level,
+                "chunk_start": row.chunk_start,
+                "chunk_end": row.chunk_end,
+                "summary": row.summary,
+                "token_count": row.token_count,
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+            }
+        return None
+
+
+def delete_session_summaries(session_id: str) -> int:
+    """세션 요약 삭제"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM session_summaries WHERE session_id = ?", (session_id,))
+        count = cursor.rowcount
+        conn.commit()
+        return count
+
+
+def get_session_turn_count(session_id: str) -> int:
+    """세션의 총 턴 수 (user 메시지 기준)"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT COUNT(*) FROM chat_messages
+            WHERE session_id = ? AND role = 'user'
+        """, (session_id,))
+        result = cursor.fetchone()
+        return result[0] if result else 0
+
+
+def get_messages_by_turn_range(session_id: str, start_turn: int, end_turn: int) -> List[Dict[str, Any]]:
+    """턴 범위로 메시지 조회 (요약 생성용)"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        # ROW_NUMBER로 턴 번호 계산 후 필터링
+        cursor.execute("""
+            WITH numbered AS (
+                SELECT id, session_id, role, content, timestamp,
+                       ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY sequence, timestamp) as turn_num
+                FROM chat_messages
+                WHERE session_id = ?
+            )
+            SELECT id, session_id, role, content, timestamp, turn_num
+            FROM numbered
+            WHERE turn_num BETWEEN ? AND ?
+            ORDER BY turn_num
+        """, (session_id, start_turn, end_turn))
+
+        messages = []
+        for row in cursor.fetchall():
+            messages.append({
+                "id": row.id,
+                "session_id": row.session_id,
+                "role": row.role,
+                "content": row.content,
+                "timestamp": row.timestamp.isoformat() if row.timestamp else None,
+                "turn_num": row.turn_num,
+            })
+        return messages
 
 
 # =============================================================================

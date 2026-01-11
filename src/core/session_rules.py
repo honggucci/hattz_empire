@@ -29,19 +29,13 @@ CONSTITUTION = """
 - 사용자 인증/권한 검사 우회 금지
 - SQL 인젝션, XSS, 명령어 삽입 취약점 생성 금지
 
-### 2. 자금 안전 (Financial Safety)
+### 2. 시스템 무결성 (System Integrity)
 - 무한 루프로 API 호출 반복 금지
-- 시장가 주문 무제한 발사 금지 (세션 규정으로 허용된 경우 제외)
-- 레버리지 50x 이상 금지
-- 테스트되지 않은 코드로 실거래 금지
-
-### 3. 시스템 무결성 (System Integrity)
 - 로그 삭제/조작 금지
-- 백업 시스템 비활성화 금지
 - Circuit Breaker 우회 금지
 - 타임아웃 없는 외부 API 호출 금지
 
-### 4. 윤리 (Ethics)
+### 3. 윤리 (Ethics)
 - 불법 활동 지원 금지
 - 개인정보 무단 수집/유출 금지
 - 시스템 악용 금지
@@ -54,17 +48,6 @@ Constitution 위반은 즉시 REJECT + 관리자 알림
 # =============================================================================
 # Session Rules Schema
 # =============================================================================
-
-@dataclass
-class TradingRules:
-    """트레이딩 관련 규정"""
-    market_order: str = "forbid"  # "forbid", "allow_with_limit", "allow"
-    max_order_usd: float = 100.0
-    max_leverage: int = 1
-    entry_limit_pct_below_last: float = 2.0
-    require_stop_loss: bool = True
-    max_position_pct: float = 10.0  # 총 자본 대비 최대 포지션 %
-
 
 @dataclass
 class CodeRules:
@@ -91,9 +74,8 @@ class QualityRules:
 class SessionRules:
     """세션 규정 전체"""
     session_id: str
-    mode: str = "dev"  # "live", "paper", "backtest", "dev"
-    risk_profile: str = "normal"  # "strict", "normal", "fast"
-    trading: TradingRules = field(default_factory=TradingRules)
+    mode: str = "dev"
+    risk_profile: str = "normal"
     code: CodeRules = field(default_factory=CodeRules)
     quality: QualityRules = field(default_factory=QualityRules)
     overrides: List[str] = field(default_factory=list)  # 추가 예외 사항
@@ -117,7 +99,6 @@ class SessionRules:
             session_id=data.get("session_id", "unknown"),
             mode=data.get("mode", "dev"),
             risk_profile=data.get("risk_profile", "normal"),
-            trading=TradingRules(**data.get("trading", {})),
             code=CodeRules(**data.get("code", {})),
             quality=QualityRules(**{k: v for k, v in data.get("quality", {}).items()
                                    if k in QualityRules.__dataclass_fields__}),
@@ -132,93 +113,20 @@ class SessionRules:
 # =============================================================================
 
 PRESET_RULES = {
-    # 실거래 모드 - 가장 엄격
-    "live_strict": SessionRules(
-        session_id="live_strict",
-        mode="live",
-        risk_profile="strict",
-        trading=TradingRules(
-            market_order="forbid",
-            max_order_usd=50.0,
-            max_leverage=1,
-            require_stop_loss=True,
-            max_position_pct=5.0,
-        ),
-        code=CodeRules(
-            forbid_sleep_in_api_loop=True,
-            require_rate_limit_guard=True,
-            secrets_hardcoding="forbid",
-            require_type_hints=True,
-            forbid_print_debug=True,
-        ),
-        quality=QualityRules(
-            allow_skip_tests=False,
-            max_files_changed=5,
-            require_review_before_merge=True,
-        ),
-    ),
-
-    # 페이퍼 트레이딩 - 중간
-    "paper": SessionRules(
-        session_id="paper",
-        mode="paper",
-        risk_profile="normal",
-        trading=TradingRules(
-            market_order="allow_with_limit",
-            max_order_usd=1000.0,
-            max_leverage=5,
-            require_stop_loss=True,
-        ),
-        code=CodeRules(
-            forbid_sleep_in_api_loop=True,
-            require_rate_limit_guard=True,
-            forbid_print_debug=False,
-        ),
-        quality=QualityRules(
-            allow_skip_tests=False,
-            max_files_changed=12,
-        ),
-    ),
-
-    # 개발 모드 - 완화
+    # 개발 모드 (기본)
     "dev": SessionRules(
         session_id="dev",
         mode="dev",
         risk_profile="normal",
-        trading=TradingRules(
-            market_order="forbid",  # 개발 중에도 시장가 금지
-            max_order_usd=0.0,  # 실제 주문 금지
-        ),
         code=CodeRules(
             forbid_sleep_in_api_loop=True,
-            require_rate_limit_guard=False,  # 개발 중엔 완화
+            require_rate_limit_guard=False,
             forbid_print_debug=False,
         ),
         quality=QualityRules(
-            allow_skip_tests=True,
+            allow_skip_tests=False,
             skip_tests_conditions=["docs_only", "comments_only", "config_only"],
             max_files_changed=20,
-            require_review_before_merge=False,
-        ),
-    ),
-
-    # 백테스트 모드 - 빠른 실험용
-    "backtest_fast": SessionRules(
-        session_id="backtest_fast",
-        mode="backtest",
-        risk_profile="fast",
-        trading=TradingRules(
-            market_order="allow",  # 백테스트는 상관없음
-            max_leverage=10,
-        ),
-        code=CodeRules(
-            forbid_print_debug=False,
-            require_type_hints=False,  # 빠른 실험
-        ),
-        quality=QualityRules(
-            allow_skip_tests=True,
-            skip_tests_conditions=["all"],  # 백테스트 코드는 테스트 스킵 가능
-            max_files_changed=50,
             require_review_before_merge=False,
         ),
     ),
@@ -326,15 +234,14 @@ Rules Hash: {rules_hash}
 {test_results if test_results else "(not provided)"}
 
 [CHECK ORDER - MUST FOLLOW]
-1) Safety/Integrity (secrets, live-trade risk, infinite loops, API abuse)
+1) Safety/Integrity (secrets, infinite loops, API abuse)
    - API keys hardcoded? → CRITICAL REJECT
    - Infinite loop without break? → CRITICAL REJECT
-   - Market order without session permission? → CRITICAL REJECT
 
 2) Session Rules compliance
    - Check each rule in the JSON
    - mode={session_rules.mode}, risk_profile={session_rules.risk_profile}
-   - trading.market_order={session_rules.trading.market_order}
+   - code.secrets_hardcoding={session_rules.code.secrets_hardcoding}
    - quality.allow_skip_tests={session_rules.quality.allow_skip_tests}
 
 3) Change Quality (scope creep, missing rollback, regression risk)
@@ -347,7 +254,7 @@ Rules Hash: {rules_hash}
   "verdict": "PASS" | "REJECT",
   "violations": [
     {{
-      "rule_key": "trading.market_order" | "constitution.secrets" | etc,
+      "rule_key": "code.secrets_hardcoding" | "constitution.secrets" | etc,
       "severity": "critical" | "high" | "medium" | "low",
       "description": "What was violated",
       "evidence": "file:line or specific evidence",
@@ -463,15 +370,7 @@ def get_current_rules(session_id: str) -> SessionRules:
     TODO: DB에서 세션별 규정 조회
     현재는 기본 dev 규정 반환
     """
-    # 세션 ID에서 모드 추론
-    if "live" in session_id.lower():
-        return get_preset_rules("live_strict")
-    elif "paper" in session_id.lower():
-        return get_preset_rules("paper")
-    elif "backtest" in session_id.lower():
-        return get_preset_rules("backtest_fast")
-    else:
-        return get_preset_rules("dev")
+    return get_preset_rules("dev")
 
 
 def parse_reviewer_output(output: str) -> Optional[ReviewResult]:

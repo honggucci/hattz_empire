@@ -1,7 +1,158 @@
-# Hattz Empire - AI Orchestration System (v2.6.0)
+# Hattz Empire - AI Orchestration System (v2.6.9)
 
 ## 프로젝트 개요
 비용 최적화 AI 팀 오케스트레이션 시스템. 비용 86% 절감 + 품질 유지 + JSONL 영속화.
+
+---
+
+## v2.6.9 아키텍처 (2026-01-10)
+
+**핵심 변경**: Session Memory - 계층적 요약 시스템
+
+### v2.6.9 신규 변경사항
+
+1. **계층적 요약 시스템** (`session_memory.py`)
+   - Level 0: 10턴마다 턴 요약 (~200 토큰)
+   - Level 1: 50턴마다 청크 요약 (~300 토큰)
+   - Level 2: 세션 종료 시 메타 요약 (~500 토큰)
+
+2. **세션 연속성** (`parent_session_id`)
+   - 새 세션에서 이전 세션의 요약 자동 주입
+   - RAG 오염 없이 명시적 세션 연결
+   - ~1000 토큰으로 전체 세션 컨텍스트 복원
+
+3. **자동 요약 트리거** (`chat.py`)
+   - 메시지 저장 후 자동으로 턴 수 체크
+   - 10/50턴 임계치 도달 시 요약 생성
+   - SSE 이벤트로 클라이언트에 요약 생성 알림
+
+### Session Memory 흐름
+
+```
+메시지 저장
+    │
+    └─ trigger_session_summary(session_id)
+           │
+           ├─ 10턴 도달? → Level 0 요약 생성 (Claude CLI Sonnet)
+           │
+           └─ 50턴 도달? → Level 1 요약 생성 (Level 0들 압축)
+
+새 세션 생성 (parent_session_id 지정)
+    │
+    └─ get_parent_session_context(parent_session_id)
+           │
+           ├─ Level 2 메타 요약 (없으면 생성)
+           ├─ 최근 Level 1 청크 요약
+           └─ 최근 10턴 원문
+           │
+           └─ → ~1000 토큰 컨텍스트 주입
+```
+
+### Session Summaries 테이블 스키마
+
+```sql
+CREATE TABLE session_summaries (
+    id INT IDENTITY PRIMARY KEY,
+    session_id VARCHAR(50) NOT NULL,
+    level INT NOT NULL,              -- 0: 턴 요약, 1: 청크 요약, 2: 메타 요약
+    chunk_start INT,                 -- 시작 턴
+    chunk_end INT,                   -- 종료 턴
+    summary NVARCHAR(MAX),           -- 요약 내용
+    token_count INT DEFAULT 0,       -- 토큰 수
+    created_at DATETIME DEFAULT GETDATE()
+);
+```
+
+### 주요 함수
+
+```python
+# 요약 체크 및 생성 (chat.py에서 호출)
+check_and_summarize(session_id) -> {"generated": [...], "turn_count": int}
+
+# 세션 종료 시 메타 요약 생성
+finalize_session(session_id) -> int
+
+# 이전 세션 컨텍스트 조회 (CLI context injection)
+get_parent_session_context(parent_session_id) -> str
+```
+
+---
+
+## v2.6.8 아키텍처 (2026-01-10)
+
+**핵심 변경**: CLI 세션 DB 영속화 + JSONL 폴백 시스템
+
+### v2.6.8 신규 변경사항
+
+1. **CLI 세션 DB 영속화**
+   - `cli_sessions` 테이블 생성 (MSSQL)
+   - 서버 재시작해도 세션 UUID 유지
+   - 메모리 캐시 + DB 하이브리드 구조
+
+2. **JSONL 폴백 시스템**
+   - CLI 세션 파일 만료 시 자동 감지
+   - JSONL에서 최근 대화 10개 로드
+   - 컨텍스트 프롬프트 자동 주입
+
+3. **세션 만료 감지**
+   - `%APPDATA%\Claude\sessions\` 파일 존재 확인
+   - 24시간 이상 미사용 세션 만료 처리
+   - 만료 시 새 세션 생성 + JSONL 컨텍스트 복구
+
+### CLI 세션 영속화 흐름
+
+```
+CLI 호출 요청
+    │
+    ├─ 캐시 확인 → HIT → 세션 파일 만료?
+    │                        │
+    │                        ├─ 만료 → JSONL 컨텍스트 로드 → 새 세션 생성
+    │                        └─ 유효 → 기존 세션 사용
+    │
+    └─ 캐시 MISS → DB 조회 → FOUND → 세션 파일 만료?
+                        │              │
+                        │              ├─ 만료 → JSONL 컨텍스트 로드 → 새 세션 생성
+                        │              └─ 유효 → 캐시에 로드 + 기존 세션 사용
+                        │
+                        └─ NOT FOUND → 새 세션 생성 (DB + 캐시)
+```
+
+### CLI 세션 테이블 스키마
+
+```sql
+CREATE TABLE cli_sessions (
+    session_key NVARCHAR(255) PRIMARY KEY,  -- "session_id:profile"
+    cli_uuid NVARCHAR(36) NOT NULL,         -- Claude CLI 세션 UUID
+    call_count INT DEFAULT 0,                -- 호출 횟수 (--resume 판단용)
+    profile NVARCHAR(50),                    -- coder, qa, reviewer 등
+    chat_session_id NVARCHAR(255),          -- 웹 채팅 세션 ID
+    created_at DATETIME DEFAULT GETDATE(),
+    updated_at DATETIME DEFAULT GETDATE()
+);
+```
+
+### JSONL 폴백 함수
+
+```python
+# CLI 세션 만료 감지
+check_cli_session_expired(session_uuid) -> bool
+
+# JSONL에서 컨텍스트 로드
+load_jsonl_context(session_id, profile, max_messages=10) -> List[Dict]
+
+# 컨텍스트 프롬프트 생성
+build_context_prompt(context_messages) -> str
+```
+
+### 테스트 결과
+
+```
+tests/test_cli_session_recovery.py - 11/11 PASSED
+- DB 세션 CRUD 테스트 (4개)
+- JSONL 폴백 테스트 (4개)
+- 통합 테스트 (2개)
+- 서버 재시작 복구 시나리오 (1개)
+```
 
 ---
 
@@ -83,6 +234,62 @@ EscalationLevel:
 - ROLE_SWITCH (count=2): 다른 역할로 전환 (1회 제한)
 - HARD_FAIL (count≥3): CEO 에스컬레이션
 ```
+
+---
+
+## v2.6.5 아키텍처 (2026-01-09)
+
+**핵심 변경**: Researcher Perplexity → Claude CLI + 날짜 자동 주입
+
+### v2.6.5 신규 변경사항
+
+1. **Researcher 모델 변경**
+   - Perplexity Sonar Pro → Claude CLI Sonnet 4.5
+   - API 비용 절감 + 통합 관리
+   - WebSearch 도구 활용
+
+2. **날짜 자동 주입 시스템** (`llm_caller.py`)
+   - Researcher 호출 시 오늘 날짜 자동 주입
+   - 검색 쿼리에 현재 연도 포함 강제
+   - 2-3년 이상 오래된 정보 경고 표시
+
+3. **페르소나 파일 업데이트**
+   - `researcher.md`: Dual Engine → Single Engine
+   - 날짜 확인 의무 명시
+
+### Researcher 날짜 주입 로직
+
+```python
+# v2.6.5: Researcher에게 오늘 날짜 주입 (최신 정보 검색 강제)
+if agent_role == "researcher":
+    today = datetime.now().strftime("%Y-%m-%d")
+    current_year = datetime.now().year
+    system_prompt += f"""
+
+## 중요: 현재 날짜
+
+오늘 날짜: **{today}** ({current_year}년)
+
+리서치 시 반드시:
+1. 검색 쿼리에 "{current_year}" 또는 "latest" 포함
+2. 2-3년 이상 오래된 정보는 경고 표시
+3. 출처의 발행 날짜를 확인하고 명시
+
+"""
+```
+
+### 최종 모델 구성 (v2.6.5)
+
+| 역할 | 모델 | 티어 |
+|------|------|------|
+| PM | Claude CLI Opus 4.5 | EXEC |
+| Coder | Claude CLI Opus 4.5 | EXEC |
+| Excavator | Claude CLI Opus 4.5 | EXEC |
+| QA | Claude CLI Sonnet 4.5 | EXEC |
+| Reviewer | Claude CLI Sonnet 4.5 | EXEC |
+| Analyst | Claude CLI Sonnet 4.5 | EXEC |
+| **Researcher** | **Claude CLI Sonnet 4.5** | **EXEC** |
+| Strategist | GPT-5.2 Thinking Extended | VIP-THINKING |
 
 ---
 
