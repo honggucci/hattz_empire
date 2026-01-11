@@ -79,7 +79,10 @@
       "Bash(python run_step0_baseline.py:*)",
       "Bash(python run_step1_bear_short_benchmark.py:*)",
       "Bash(sqlite3:*)",
-      "Bash(more:*)"
+      "Bash(more:*)",
+      "Bash(timeout 600 python:*)",
+      "Bash(timeout 300 python:*)",
+      "Bash(timeout 400 python:*)"
     ]
   }
 }

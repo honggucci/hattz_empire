@@ -1,11 +1,11 @@
 # HATTZ EMPIRE - AI Orchestration System
 
-[![Version](https://img.shields.io/badge/version-v2.6.9-blue.svg)](https://github.com/hattz/hattz-empire)
+[![Version](https://img.shields.io/badge/version-v2.6.10-blue.svg)](https://github.com/hattz/hattz-empire)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11+-yellow.svg)](https://python.org)
 
-> **2026.01.09 | Researcher Claude CLI 전환 + 날짜 자동 주입**
-> **무조건 최신 정보만 리서치**
+> **2026.01.11 | Council 재활성화 + CEO 수동 위원회 소집**
+> **코딩 모드 자동 Council 호출 + 점수 소수점 2자리 처리**
 
 ---
 
@@ -250,7 +250,7 @@ ngrok http 5000 --domain=your-domain.ngrok-free.app
 
 ## Council (7인 위원회)
 
-PM 전용. 모두 Claude CLI Sonnet 4 (profile: reviewer)
+PM 전용. 모두 Claude CLI Sonnet 4 (profile: council)
 
 | 멤버 | 관점 |
 |------|------|
@@ -262,17 +262,33 @@ PM 전용. 모두 Claude CLI Sonnet 4 (profile: reviewer)
 | Devil's Advocate 😈 | 반례 1개만 제대로 |
 | Security Hawk 🦅 | OWASP/비밀/권한/인증 |
 
+### v2.6.10 Council 기능
+
+- **CEO 수동 소집**: 헤더 메뉴에서 "위원회 소집" 버튼 클릭
+- **코딩 모드 자동 호출**: 코딩 모드에서 Coder 응답 후 자동 Council 심사
+- **점수 소수점 2자리**: 모든 점수가 `round(x, 2)` 처리
+
 ### 출력 스키마
 
 ```json
 {
   "member": "Skeptic",
   "vote": "APPROVE | REJECT",
-  "score": 0-100,
+  "score": 0-10,
   "one_blocker": "없으면 빈문자",
   "one_fix": "한 줄"
 }
 ```
+
+### API Endpoints
+
+| Method | Endpoint | 설명 |
+|--------|----------|------|
+| GET | `/api/council/types` | 위원회 유형 목록 |
+| GET | `/api/council/personas` | 페르소나 목록 |
+| POST | `/api/council/convene` | 위원회 소집 |
+| POST | `/api/council/convene-last` | CEO 수동 소집 (마지막 응답 심사) |
+| GET | `/api/council/history` | 판정 히스토리 |
 
 ---
 
@@ -323,6 +339,9 @@ Monitoring:
 
 | 버전 | 날짜 | 코드네임 |
 |------|------|----------|
+| v2.6.10 | 2026-01-11 | Council 재활성화 + CEO 수동 위원회 소집 |
+| v2.6.9 | 2026-01-10 | 세션 이어가기 기능 |
+| v2.6.5 | 2026-01-09 | Researcher Claude CLI 전환 + 날짜 자동 주입 |
 | v2.6.0 | 2026-01-07 | Analytics Dashboard + RAG Agent Filter |
 | v2.5.5 | 2026-01-07 | 부트로더 원칙 + PM DFA + Semantic Guard |
 | v2.5.4 | 2026-01-07 | PM Decision Machine + Retry Escalation |
@@ -339,4 +358,4 @@ MIT License
 
 ---
 
-*Last Updated: 2026-01-07 | Hattz Empire v2.6.0*
+*Last Updated: 2026-01-11 | Hattz Empire v2.6.10*

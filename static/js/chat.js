@@ -2575,3 +2575,122 @@ function showModeChangeNotification(mode) {
 document.addEventListener('DOMContentLoaded', () => {
     initializeModeButtons();
 });
+
+// =============================================================================
+// Council (위원회) 수동 소집 기능 (v2.6.10)
+// =============================================================================
+
+/**
+ * CEO 수동 위원회 소집
+ * 마지막 assistant 응답을 위원회에서 검토
+ */
+async function conveneCouncil() {
+    if (!currentSessionId) {
+        alert('세션이 없습니다. 먼저 대화를 시작하세요.');
+        return;
+    }
+
+    // 로딩 표시
+    const loadingId = showLoading();
+    setStatus('위원회 소집 중...', true, 'thinking');
+
+    try {
+        const response = await fetch('/api/council/convene-last', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                session_id: currentSessionId,
+                council_type: 'pm',
+                context: 'CEO 수동 소집'
+            })
+        });
+
+        const data = await response.json();
+        removeLoading(loadingId);
+
+        if (!response.ok) {
+            setStatus('위원회 소집 실패', false);
+            alert(`위원회 소집 실패: ${data.error || 'Unknown error'}`);
+            return;
+        }
+
+        // 위원회 결과 표시
+        displayCouncilResult(data);
+        setStatus('Ready', false);
+
+    } catch (error) {
+        console.error('[Council] Error:', error);
+        removeLoading(loadingId);
+        setStatus('위원회 소집 오류', false);
+        alert(`위원회 소집 오류: ${error.message}`);
+    }
+}
+
+/**
+ * 위원회 결과를 채팅창에 표시
+ */
+function displayCouncilResult(result) {
+    const verdictEmoji = {
+        'PASS': '✅',
+        'FAIL': '❌',
+        'CEO_REVIEW': '⚠️'
+    };
+
+    let html = `
+        <div class="council-result">
+            <div class="council-header">
+                <span class="council-icon">🏛️</span>
+                <span class="council-title">위원회 판정</span>
+                <span class="council-verdict ${result.verdict.toLowerCase()}">${verdictEmoji[result.verdict] || '📋'} ${result.verdict}</span>
+            </div>
+            <div class="council-score">
+                <span class="score-label">평균 점수:</span>
+                <span class="score-value">${result.average_score.toFixed(1)}/10</span>
+                <span class="score-std">(편차: ${result.score_std?.toFixed(2) || 0})</span>
+            </div>
+            <div class="council-judges">
+    `;
+
+    // 심사위원 평가
+    if (result.judges && result.judges.length > 0) {
+        result.judges.forEach(judge => {
+            const scoreClass = judge.score >= 7 ? 'high' : judge.score >= 5 ? 'medium' : 'low';
+            html += `
+                <div class="judge-item">
+                    <span class="judge-icon">${judge.icon || '👤'}</span>
+                    <span class="judge-name">${judge.persona_name}</span>
+                    <span class="judge-score ${scoreClass}">${judge.score}/10</span>
+                    ${judge.reasoning ? `<span class="judge-reasoning">${judge.reasoning}</span>` : ''}
+                </div>
+            `;
+        });
+    }
+
+    html += `
+            </div>
+            ${result.summary ? `<div class="council-summary">${result.summary}</div>` : ''}
+            <div class="council-meta">
+                <span class="council-type">${result.council_type}</span>
+                <span class="council-time">${new Date(result.timestamp).toLocaleString()}</span>
+            </div>
+        </div>
+    `;
+
+    // 채팅창에 시스템 메시지로 추가
+    const messageDiv = document.createElement('div');
+    messageDiv.className = 'message system council-message';
+    messageDiv.innerHTML = html;
+    chatMessages.appendChild(messageDiv);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+// 위원회 소집 버튼 이벤트 리스너
+document.addEventListener('DOMContentLoaded', () => {
+    const conveneBtn = document.getElementById('convene-council-btn');
+    if (conveneBtn) {
+        conveneBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            conveneCouncil();
+        });
+    }
+});

@@ -604,6 +604,9 @@ CLI_PROFILE_MODELS = {
 # DB가 primary, 메모리는 캐시 역할
 _session_cache: Dict[str, Dict[str, Any]] = {}
 
+# 일반 세션 UUID 저장소 (session_id:profile -> session_uuid)
+_session_registry: Dict[str, str] = {}
+
 # 위원회 세션 UUID 저장소 (task_id:role:persona -> session_uuid)
 # 각 위원회 멤버가 독립된 CLI 세션을 가짐
 _committee_session_registry: Dict[str, str] = {}

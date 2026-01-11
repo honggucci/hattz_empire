@@ -7,12 +7,13 @@ Hattz Empire - AI Orchestration System
 # VERSION - Single Source of Truth
 # 이 값만 변경하면 문서 동기화 스크립트가 전체 업데이트
 # =============================================================================
-VERSION = "2.6.9"
+VERSION = "2.6.10"
 VERSION_DATE = "2026-01-11"
-VERSION_CODENAME = "Session Memory + Hierarchical Summary"
+VERSION_CODENAME = "Council 재활성화 + CEO 수동 위원회 소집"
 
 # 버전 히스토리
 VERSION_HISTORY = {
+    "2.6.10": "Council 재활성화 + CEO 수동 위원회 소집 (2026-01-11)",
     "2.6.9": "Session Memory + Hierarchical Summary (2026-01-11)",
     "2.6.8": "CLI Session DB Persistence (2026-01-10)",
     "2.6.5": "Researcher Claude CLI + Date Auto-Injection (2026-01-09)",
@@ -47,7 +48,8 @@ ENFORCE_OUTPUT_CONTRACT = os.getenv("ENFORCE_OUTPUT_CONTRACT", "true").lower() =
 
 # 형식 검증에서 제외할 에이전트 (외부 API 등 JSON 강제 불가)
 # 주의: 면제 에이전트 추가는 기술 부채. 최소화 필수.
-CONTRACT_EXEMPT_AGENTS = {"researcher", "analyst"}  # Perplexity, Gemini는 JSON 강제 어려움
+# v2.6.9: PM 추가 - 일반 대화에서 자연어 응답 허용 (JSON 강제 시 사용성 저하)
+CONTRACT_EXEMPT_AGENTS = {"pm", "researcher", "analyst"}
 
 
 @dataclass

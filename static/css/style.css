@@ -2922,3 +2922,199 @@ body.page-admin {
         padding: 8px;
     }
 }
+
+/* =============================================================================
+   Council (위원회) 결과 스타일 (v2.6.10)
+   ============================================================================= */
+
+.council-btn {
+    width: 100%;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    text-align: left;
+}
+
+.council-message {
+    max-width: 90%;
+    margin: 16px auto;
+}
+
+.council-result {
+    background: linear-gradient(135deg, var(--bg-tertiary) 0%, var(--bg-secondary) 100%);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    padding: 16px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.council-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 12px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.council-icon {
+    font-size: 24px;
+}
+
+.council-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-primary);
+    flex: 1;
+}
+
+.council-verdict {
+    font-size: 14px;
+    font-weight: 600;
+    padding: 4px 12px;
+    border-radius: 16px;
+    text-transform: uppercase;
+}
+
+.council-verdict.pass {
+    background: rgba(63, 185, 80, 0.2);
+    color: var(--accent-green);
+    border: 1px solid var(--accent-green);
+}
+
+.council-verdict.fail {
+    background: rgba(248, 81, 73, 0.2);
+    color: var(--accent-red);
+    border: 1px solid var(--accent-red);
+}
+
+.council-verdict.ceo_review {
+    background: rgba(210, 153, 34, 0.2);
+    color: var(--accent-yellow);
+    border: 1px solid var(--accent-yellow);
+}
+
+.council-score {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 16px;
+    padding: 8px 12px;
+    background: var(--bg-primary);
+    border-radius: 8px;
+}
+
+.score-label {
+    color: var(--text-secondary);
+    font-size: 13px;
+}
+
+.score-value {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--accent-blue);
+}
+
+.score-std {
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.council-judges {
+    display: grid;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.judge-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: var(--bg-primary);
+    border-radius: 6px;
+    font-size: 13px;
+}
+
+.judge-icon {
+    font-size: 18px;
+}
+
+.judge-name {
+    color: var(--text-secondary);
+    min-width: 100px;
+}
+
+.judge-score {
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 4px;
+}
+
+.judge-score.high {
+    background: rgba(63, 185, 80, 0.2);
+    color: var(--accent-green);
+}
+
+.judge-score.medium {
+    background: rgba(210, 153, 34, 0.2);
+    color: var(--accent-yellow);
+}
+
+.judge-score.low {
+    background: rgba(248, 81, 73, 0.2);
+    color: var(--accent-red);
+}
+
+.judge-reasoning {
+    flex: 1;
+    color: var(--text-muted);
+    font-size: 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.council-summary {
+    padding: 12px;
+    background: var(--bg-primary);
+    border-radius: 8px;
+    border-left: 3px solid var(--accent-blue);
+    color: var(--text-secondary);
+    font-size: 13px;
+    line-height: 1.5;
+    margin-bottom: 12px;
+}
+
+.council-meta {
+    display: flex;
+    justify-content: space-between;
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+.council-type {
+    text-transform: uppercase;
+    background: var(--bg-primary);
+    padding: 2px 8px;
+    border-radius: 4px;
+}
+
+/* 반응형 */
+@media (max-width: 768px) {
+    .council-result {
+        padding: 12px;
+    }
+
+    .council-judges {
+        grid-template-columns: 1fr;
+    }
+
+    .judge-reasoning {
+        display: none;
+    }
+
+    .judge-name {
+        min-width: auto;
+    }
+}

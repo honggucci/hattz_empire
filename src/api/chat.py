@@ -122,6 +122,10 @@ from src.core.decision_machine import (
 # v2.6.9 Session Memory
 from src.services.session_memory import check_and_summarize
 
+# v2.6.10 Council Integration
+from src.infra.council import get_council, Verdict
+from src.core.llm_caller import init_council_with_llm, convene_council_sync
+
 # =============================================================================
 # v2.6.9 Session Memory 헬퍼 함수
 # =============================================================================
@@ -2035,6 +2039,44 @@ def _execute_coding_mode_job(job_id: str):
 
         # 최종 결과 저장
         final_result = f"# 코딩 모드 결과\n\n## 전략\n{strategy}\n\n## 구현\n{code}\n\n## QA\n{qa_result}\n\n## 리뷰\n{review}"
+
+        # v2.6.10: Council 자동 소집 (코딩 품질 검증)
+        council_result = None
+        job['stage'] = 'council'
+        try:
+            print(f"[Council] 코딩 모드 자동 소집 시작")
+            council_result = convene_council_sync(
+                council_type="pm",
+                content=final_result,
+                context=f"원본 요청: {task}",
+                trigger_source="coding_mode_auto"
+            )
+            print(f"[Council] 판정: {council_result['verdict']} (평균 {council_result['average_score']}/10)")
+
+            # Council 결과를 최종 응답에 추가
+            council_summary = f"""
+
+---
+
+## 🏛️ 위원회 판정
+
+**판정**: {council_result['verdict'].upper()}
+**평균 점수**: {council_result['average_score']}/10 (편차: {council_result.get('score_std', 0)})
+
+### 심사위원 평가
+"""
+            for judge in council_result.get('judges', []):
+                council_summary += f"- {judge.get('icon', '👤')} {judge.get('persona_name', 'Unknown')}: {judge.get('score', 0)}/10\n"
+
+            if council_result.get('summary'):
+                council_summary += f"\n**요약**: {council_result['summary']}"
+
+            final_result += council_summary
+            job['council_result'] = council_result
+
+        except Exception as e:
+            print(f"[Council] 코딩 모드 위원회 소집 오류: {e}")
+            job['council_error'] = str(e)
 
         db.add_message(
             session_id=session_id,
